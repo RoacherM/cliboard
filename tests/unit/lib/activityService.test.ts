@@ -618,6 +618,101 @@ describe('summarizeToolInput', () => {
   });
 });
 
+function makeCommandRow(name: string, args: string | null, timestamp: string) {
+  let content = `<command-message>${name}</command-message>\n<command-name>/${name}</command-name>`;
+  if (args !== null) {
+    content += `\n<command-args>${args}</command-args>`;
+  }
+  return JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content },
+    timestamp,
+  });
+}
+
+describe('parseActivity — slash commands', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('parses a command-message string into a command entry', async () => {
+    const lines = makeCommandRow('review-loop:review-loop', '性能 bug UI布局 等全面检查', '2026-02-25T14:13:55Z');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: 'command',
+      description: 'review-loop',
+      prompt: '性能 bug UI布局 等全面检查',
+      status: 'completed',
+      completedAt: '2026-02-25T14:13:55Z',
+      timestamp: '2026-02-25T14:13:55Z',
+      isError: false,
+    });
+  });
+
+  it('extracts display name from plugin:command format', async () => {
+    const lines = makeCommandRow('commit-commands:commit', '-m "fix"', '2026-02-25T10:00:00Z');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result[0].description).toBe('commit');
+  });
+
+  it('uses full name when no colon present', async () => {
+    const lines = makeCommandRow('exit', null, '2026-02-25T10:00:00Z');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result[0].description).toBe('exit');
+    expect(result[0].prompt).toBe('');
+  });
+
+  it('sorts commands with tool_use entries by timestamp', async () => {
+    const lines = [
+      makeAssistantRow(
+        [{ type: 'tool_use', name: 'Read', id: 'toolu_r1', input: { file_path: '/src/app.ts' } }],
+        '2026-02-25T10:00:00Z',
+      ),
+      makeCommandRow('review-loop:review-loop', 'check', '2026-02-25T09:00:00Z'),
+    ].join('\n');
+
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+    const result = await parseActivity('/tmp/test.jsonl');
+
+    expect(result).toHaveLength(2);
+    expect(result[0].type).toBe('command'); // 09:00 comes first
+    expect(result[1].type).toBe('tool');    // 10:00 comes second
+  });
+
+  it('ignores string user messages without command tags', async () => {
+    const lines = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: 'Just a regular message' },
+      timestamp: '2026-02-25T10:00:00Z',
+    });
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(0);
+  });
+
+  it('handles command without command-args tag', async () => {
+    const content = '<command-message>exit</command-message>\n<command-name>/exit</command-name>';
+    const lines = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content },
+      timestamp: '2026-02-25T10:00:00Z',
+    });
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(1);
+    expect(result[0].prompt).toBe('');
+  });
+});
+
 function makeActivityEntry(overrides: Partial<ActivityEntry>): ActivityEntry {
   return {
     id: 'toolu_default',

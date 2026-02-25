@@ -50,6 +50,7 @@ function entryLabelColor(entry: ActivityEntry): string {
     case 'skill': return 'magenta';
     case 'tool': return 'yellow';
     case 'mcp': return 'green';
+    case 'command': return 'blue';
     default: return 'cyan';
   }
 }
@@ -59,6 +60,7 @@ function entryBadge(entry: ActivityEntry): string {
     case 'skill': return '[Skill]';
     case 'tool': return `[${entry.toolName ?? 'Tool'}]`;
     case 'mcp': return `[${parseMcpFunctionName(entry.toolName ?? '')}]`;
+    case 'command': return `[/${entry.description}]`;
     default: return `[${entry.subagentType ?? 'Agent'}]`;
   }
 }
@@ -119,6 +121,7 @@ export function ActivityOverlay({
   const skills = entries.filter((e) => e.type === 'skill');
   const tools = entries.filter((e) => e.type === 'tool');
   const mcps = entries.filter((e) => e.type === 'mcp');
+  const commands = entries.filter((e) => e.type === 'command');
   const running = entries.filter((e) => e.status === 'running').length;
 
   if (entries.length === 0) {
@@ -152,7 +155,7 @@ export function ActivityOverlay({
     <Box flexDirection="column" padding={1}>
       {/* Header */}
       <Text bold>
-        Activity ─ {entries.length} total │ {subagents.length} agents │ {skills.length} skills │ {tools.length} tools │ {mcps.length} mcp │ {running} running
+        Activity ─ {entries.length} total │ {subagents.length} agents │ {skills.length} skills │ {tools.length} tools │ {mcps.length} mcp │ {commands.length} cmds │ {running} running
       </Text>
       <Text dimColor>j/k:navigate  g/G:first/last  q/Esc:close</Text>
       <Text> </Text>
@@ -275,6 +278,21 @@ export function ActivityOverlay({
               </Text>
             )}
           </>
+        ) : selected.type === 'command' ? (
+          <>
+            <Text>
+              <Text dimColor>Command: </Text>
+              <Text color="blue">/{selected.description}</Text>
+            </Text>
+            <Text>
+              <Text dimColor>Status:  </Text>
+              <Text color="green">✓ Completed</Text>
+            </Text>
+            <Text>
+              <Text dimColor>Invoked: </Text>
+              <Text>{formatTimestamp(selected.timestamp)}</Text>
+            </Text>
+          </>
         ) : (
           <>
             <Text>
@@ -305,7 +323,7 @@ export function ActivityOverlay({
         )}
         {promptLines.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Text dimColor>{selected.type === 'skill' ? 'Args:' : selected.type === 'tool' || selected.type === 'mcp' ? 'Input:' : 'Prompt:'}</Text>
+            <Text dimColor>{selected.type === 'skill' || selected.type === 'command' ? 'Args:' : selected.type === 'tool' || selected.type === 'mcp' ? 'Input:' : 'Prompt:'}</Text>
             {promptLines.map((line, i) => (
               <Text key={i} wrap="truncate">{line}</Text>
             ))}

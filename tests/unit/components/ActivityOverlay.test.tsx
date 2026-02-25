@@ -86,6 +86,26 @@ function makeMcpEntry(overrides?: Partial<ActivityEntry>): ActivityEntry {
   };
 }
 
+function makeCommandEntry(overrides?: Partial<ActivityEntry>): ActivityEntry {
+  return {
+    id: 'cmd_2026-02-25T10:00:00Z',
+    type: 'command',
+    agentId: null,
+    timestamp: '2026-02-25T10:00:00Z',
+    subagentType: null,
+    description: 'review-loop',
+    prompt: '性能 bug UI布局',
+    skillName: null,
+    skillArgs: null,
+    toolName: null,
+    status: 'completed',
+    isError: false,
+    completedAt: '2026-02-25T10:00:00Z',
+    resultSummary: null,
+    ...overrides,
+  };
+}
+
 describe('ActivityOverlay', () => {
   it('renders empty state when no entries', () => {
     const { lastFrame } = render(
@@ -483,5 +503,40 @@ describe('ActivityOverlay', () => {
     expect(output).not.toContain('┬');
     expect(output).not.toContain('├');
     expect(output).not.toContain('└');
+  });
+
+  it('renders command entry with [/command-name] badge', () => {
+    const entries = [makeCommandEntry({ id: 'c1', description: 'review-loop' })];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('[/review-loop]');
+    expect(output).toContain('1 cmds');
+  });
+
+  it('shows command detail panel with command-specific fields', () => {
+    const entries = [
+      makeCommandEntry({
+        description: 'review-loop',
+        prompt: '性能 bug UI布局',
+        timestamp: '2026-02-25T14:13:55Z',
+      }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('/review-loop');
+    expect(output).toContain('Completed');
+    expect(output).toContain('性能 bug UI布局');
   });
 });

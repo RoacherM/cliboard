@@ -1406,6 +1406,26 @@ async function parseActivity(jsonlPath) {
         }
       }
     }
+    if (row.type === "user" && typeof row.message?.content === "string") {
+      const content2 = row.message.content;
+      const nameMatch = content2.match(/<command-name>\/?(.+?)<\/command-name>/);
+      if (nameMatch) {
+        const argsMatch = content2.match(/<command-args>([\s\S]*?)<\/command-args>/);
+        const rawName = nameMatch[1];
+        const displayName = rawName.includes(":") ? rawName.split(":").pop() : rawName;
+        spawns.push({
+          id: `cmd_${row.timestamp ?? String(Date.now())}`,
+          type: "command",
+          timestamp: row.timestamp ?? null,
+          subagentType: null,
+          description: displayName,
+          prompt: argsMatch?.[1]?.trim() ?? "",
+          skillName: null,
+          skillArgs: null,
+          toolName: null
+        });
+      }
+    }
     if (row.type === "progress") {
       const data = row.data ?? {};
       if (data.type === "agent_progress" && data.parentToolUseID && data.agentId) {
@@ -1417,6 +1437,24 @@ async function parseActivity(jsonlPath) {
     const result = results.get(spawn.id);
     const agentId = agentIds.get(spawn.id) ?? null;
     const isError = result?.isError ?? false;
+    if (spawn.type === "command") {
+      return {
+        id: spawn.id,
+        type: spawn.type,
+        timestamp: spawn.timestamp,
+        agentId: null,
+        subagentType: null,
+        description: spawn.description,
+        prompt: spawn.prompt,
+        skillName: null,
+        skillArgs: null,
+        toolName: null,
+        status: "completed",
+        isError: false,
+        completedAt: spawn.timestamp,
+        resultSummary: null
+      };
+    }
     let status;
     if (!result) {
       status = "running";
@@ -1617,6 +1655,8 @@ function entryLabelColor(entry) {
       return "yellow";
     case "mcp":
       return "green";
+    case "command":
+      return "blue";
     default:
       return "cyan";
   }
@@ -1629,6 +1669,8 @@ function entryBadge(entry) {
       return `[${entry.toolName ?? "Tool"}]`;
     case "mcp":
       return `[${parseMcpFunctionName(entry.toolName ?? "")}]`;
+    case "command":
+      return `[/${entry.description}]`;
     default:
       return `[${entry.subagentType ?? "Agent"}]`;
   }
@@ -1686,6 +1728,7 @@ function ActivityOverlay({
   const skills = entries.filter((e) => e.type === "skill");
   const tools = entries.filter((e) => e.type === "tool");
   const mcps = entries.filter((e) => e.type === "mcp");
+  const commands = entries.filter((e) => e.type === "command");
   const running = entries.filter((e) => e.status === "running").length;
   if (entries.length === 0) {
     return /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", padding: 1, children: [
@@ -1718,6 +1761,8 @@ function ActivityOverlay({
       " tools \u2502 ",
       mcps.length,
       " mcp \u2502 ",
+      commands.length,
+      " cmds \u2502 ",
       running,
       " running"
     ] }),
@@ -1829,6 +1874,22 @@ function ActivityOverlay({
             formatDuration(selected.timestamp, selected.completedAt)
           ] })
         ] })
+      ] }) : selected.type === "command" ? /* @__PURE__ */ jsxs8(Fragment, { children: [
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Command: " }),
+          /* @__PURE__ */ jsxs8(Text9, { color: "blue", children: [
+            "/",
+            selected.description
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Status:  " }),
+          /* @__PURE__ */ jsx10(Text9, { color: "green", children: "\u2713 Completed" })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Invoked: " }),
+          /* @__PURE__ */ jsx10(Text9, { children: formatTimestamp2(selected.timestamp) })
+        ] })
       ] }) : /* @__PURE__ */ jsxs8(Fragment, { children: [
         /* @__PURE__ */ jsxs8(Text9, { children: [
           /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Plugin:  " }),
@@ -1858,7 +1919,7 @@ function ActivityOverlay({
         ] })
       ] }),
       promptLines.length > 0 && /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", marginTop: 1, children: [
-        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: selected.type === "skill" ? "Args:" : selected.type === "tool" || selected.type === "mcp" ? "Input:" : "Prompt:" }),
+        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: selected.type === "skill" || selected.type === "command" ? "Args:" : selected.type === "tool" || selected.type === "mcp" ? "Input:" : "Prompt:" }),
         promptLines.map((line, i) => /* @__PURE__ */ jsx10(Text9, { wrap: "truncate", children: line }, i))
       ] }),
       resultLines.length > 0 && /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", marginTop: 1, children: [

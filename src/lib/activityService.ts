@@ -138,7 +138,7 @@ function extractResultText(content: unknown): string {
 
 interface ActivitySpawnInfo {
   id: string;
-  type: 'subagent' | 'skill' | 'tool' | 'mcp';
+  type: 'subagent' | 'skill' | 'tool' | 'mcp' | 'command';
   timestamp: string | null;
   // Sub-agent
   subagentType: string | null;
@@ -257,6 +257,31 @@ export async function parseActivity(jsonlPath: string): Promise<ActivityEntry[]>
       }
     }
 
+    // Collect slash command invocations from string-content user messages
+    if (
+      row.type === 'user' &&
+      typeof row.message?.content === 'string'
+    ) {
+      const content = row.message.content;
+      const nameMatch = content.match(/<command-name>\/?(.+?)<\/command-name>/);
+      if (nameMatch) {
+        const argsMatch = content.match(/<command-args>([\s\S]*?)<\/command-args>/);
+        const rawName = nameMatch[1]; // e.g. "review-loop:review-loop" or "exit"
+        const displayName = rawName.includes(':') ? rawName.split(':').pop()! : rawName;
+        spawns.push({
+          id: `cmd_${row.timestamp ?? String(Date.now())}`,
+          type: 'command',
+          timestamp: row.timestamp ?? null,
+          subagentType: null,
+          description: displayName,
+          prompt: argsMatch?.[1]?.trim() ?? '',
+          skillName: null,
+          skillArgs: null,
+          toolName: null,
+        });
+      }
+    }
+
     // Collect agent_progress entries
     if (row.type === 'progress') {
       const data = row.data ?? {};
@@ -275,6 +300,26 @@ export async function parseActivity(jsonlPath: string): Promise<ActivityEntry[]>
     const result = results.get(spawn.id);
     const agentId = agentIds.get(spawn.id) ?? null;
     const isError = result?.isError ?? false;
+
+    // Commands are instant (no tool_result), always completed
+    if (spawn.type === 'command') {
+      return {
+        id: spawn.id,
+        type: spawn.type,
+        timestamp: spawn.timestamp,
+        agentId: null,
+        subagentType: null,
+        description: spawn.description,
+        prompt: spawn.prompt,
+        skillName: null,
+        skillArgs: null,
+        toolName: null,
+        status: 'completed' as const,
+        isError: false,
+        completedAt: spawn.timestamp,
+        resultSummary: null,
+      };
+    }
 
     let status: ActivityEntry['status'];
     if (!result) {
