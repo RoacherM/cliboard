@@ -1,0 +1,53 @@
+{
+  "name": "cliboard",
+  "version": "1.0.0",
+  "description": "Claude/Codex Kanban — TUI dashboard for tracking AI coding agent tasks across projects",
+  "type": "module",
+  "bin": {
+    "cliboard": "./dist/cli.js"
+  },
+  "files": [
+    "dist/cli.js"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "codex",
+    "kanban",
+    "task",
+    "tui",
+    "terminal",
+    "anthropic",
+    "openai",
+    "ai-agent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anthropics/claude-task-viewer"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "ink": "^5",
+    "react": "^18",
+    "chokidar": "^3",
+    "commander": "^12",
+    "ink-text-input": "^6"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "@types/react": "^18",
+    "vitest": "^1",
+    "ink-testing-library": "^4",
+    "esbuild": "^0.20",
+    "@types/node": "^20"
+  }
+}
