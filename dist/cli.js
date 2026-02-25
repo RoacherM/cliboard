@@ -24,6 +24,7 @@ var METADATA_CACHE_TTL = 1e4;
 var ARCHIVE_THRESHOLD_DAYS = 7;
 var JSONL_READ_LIMIT = 65536;
 var AUTO_REFRESH_MS = 5e3;
+var SESSION_LIVENESS_MS = 5 * 6e4;
 
 // src/lib/taskDataService.ts
 var TODO_FILE_RE = /^([0-9a-f-]{36})-agent-[0-9a-f-]{36}\.json$/;
@@ -162,17 +163,40 @@ function createListCommand(claudeDir) {
 import { Command as Command2 } from "commander";
 function createShowCommand(claudeDir) {
   const cmd = new Command2("show");
-  cmd.description("Show details for a specific task").argument("<id>", "Task ID to show");
+  cmd.description("Show details for a specific task").argument("<id>", "Task ID to show").option("--session <sessionId>", "Scope to a specific session");
   cmd.action(async (id) => {
+    const opts = cmd.opts();
     const service = new TaskDataService(claudeDir);
-    const tasks = await service.readAllTasks();
-    const task = tasks.find((t) => t.id === id);
-    if (!task) {
-      console.error(`Task not found: ${id}`);
-      process.exitCode = 1;
-      return;
+    if (opts.session) {
+      const tasks = await service.readSessionTasks(opts.session);
+      const task = tasks.find((t) => t.id === id);
+      if (!task) {
+        console.error(`Task not found: ${id} in session ${opts.session}`);
+        process.exitCode = 1;
+        return;
+      }
+      task.sessionId = opts.session;
+      console.log(JSON.stringify(task, null, 2));
+    } else {
+      const tasks = await service.readAllTasks();
+      const matches = tasks.filter((t) => t.id === id);
+      if (matches.length === 0) {
+        console.error(`Task not found: ${id}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (matches.length > 1) {
+        console.error(
+          `Multiple tasks with id ${id} found across ${matches.length} sessions. Use --session <sessionId> to disambiguate.`
+        );
+        for (const m of matches) {
+          console.error(`  session: ${m.sessionId}  subject: ${m.subject}`);
+        }
+        process.exitCode = 1;
+        return;
+      }
+      console.log(JSON.stringify(matches[0], null, 2));
     }
-    console.log(JSON.stringify(task, null, 2));
   });
   return cmd;
 }
@@ -185,7 +209,7 @@ function createWatchCommand(claudeDir) {
   cmd.action(async () => {
     const { default: chokidar } = await import("chokidar");
     const path7 = await import("node:path");
-    const tasksDir = path7.join(claudeDir, "tasks");
+    const tasksDir = path7.join(claudeDir, TASKS_SUBDIR);
     console.log(`Watching ${tasksDir} for changes...`);
     const watcher = chokidar.watch(tasksDir, {
       persistent: true,
@@ -205,12 +229,13 @@ function createWatchCommand(claudeDir) {
 }
 
 // src/App.tsx
-import { useState as useState6, useCallback as useCallback3, useMemo as useMemo3, useEffect as useEffect3, useRef as useRef5 } from "react";
+import { useState as useState6, useCallback as useCallback3, useMemo as useMemo4, useEffect as useEffect3, useRef as useRef5 } from "react";
 import path5 from "node:path";
 import { Box as Box11, Text as Text10, useInput as useInput6, useApp, useStdout as useStdout2 } from "ink";
 
 // src/hooks/useClaudeData.ts
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import fs4 from "node:fs/promises";
 
 // src/lib/metadataService.ts
 import fs2 from "node:fs/promises";
@@ -426,6 +451,15 @@ var TimelineService = class {
     }
     const taskSnapshots = replayTaskEvents(entries);
     raw.push(...taskSnapshots);
+    raw.sort((a, b) => {
+      if (!a.timestamp && !b.timestamp)
+        return 0;
+      if (!a.timestamp)
+        return -1;
+      if (!b.timestamp)
+        return 1;
+      return a.timestamp.localeCompare(b.timestamp);
+    });
     const deduped = dedupe(raw);
     return deduped.map((entry) => ({
       timestamp: entry.timestamp,
@@ -604,6 +638,15 @@ function useClaudeData(claudeDir, options) {
         }
         const archiveThresholdMs = ARCHIVE_THRESHOLD_DAYS * 24 * 60 * 60 * 1e3;
         const isArchived = inProgress === 0 && Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs;
+        let isLive = false;
+        if (metadata.jsonlPath) {
+          try {
+            const stat = await fs4.stat(metadata.jsonlPath);
+            isLive = Date.now() - stat.mtimeMs < SESSION_LIVENESS_MS;
+          } catch {
+            isLive = false;
+          }
+        }
         resolved.push({
           id: sessionId,
           name,
@@ -618,6 +661,7 @@ function useClaudeData(claudeDir, options) {
           createdAt: metadata?.created ?? null,
           modifiedAt,
           isArchived,
+          isLive,
           jsonlPath: metadata?.jsonlPath ?? null
         });
       }
@@ -740,8 +784,8 @@ function PulsingDot() {
 function SessionItem({ session, isSelected, maxWidth = 26 }) {
   const prefix = isSelected ? "\u203A " : "  ";
   const counts = `${session.completed}/${session.taskCount}`;
-  const hasActive = session.inProgress > 0;
-  const staticTag = session.isArchived ? " \u2715" : hasActive ? " ." : "";
+  const hasStaleInProgress = session.inProgress > 0 && !session.isLive;
+  const staticTag = session.isArchived ? " \u2715" : hasStaleInProgress ? " ." : "";
   const suffix = ` ${counts}${staticTag}`;
   const nameMax = maxWidth - prefix.length - suffix.length;
   const name = truncate(session.name ?? session.id, Math.max(nameMax, 6));
@@ -756,10 +800,11 @@ function SessionItem({ session, isSelected, maxWidth = 26 }) {
         " ",
         counts
       ] }),
-      hasActive && !session.isArchived && /* @__PURE__ */ jsxs(Text2, { children: [
+      session.isLive && !session.isArchived && /* @__PURE__ */ jsxs(Text2, { children: [
         " ",
         /* @__PURE__ */ jsx2(PulsingDot, {})
       ] }),
+      hasStaleInProgress && !session.isArchived && /* @__PURE__ */ jsx2(Text2, { dimColor: true, children: " \u25CB" }),
       session.isArchived && /* @__PURE__ */ jsx2(Text2, { dimColor: true, children: " \u2715" })
     ] }),
     subtitle && /* @__PURE__ */ jsx2(Box2, { children: /* @__PURE__ */ jsxs(Text2, { dimColor: true, children: [
@@ -776,8 +821,6 @@ function SessionList({
   selectedIndex,
   onSelect,
   onOpen,
-  filter,
-  onFilterChange,
   isActive = true,
   visibleHeight = 20
 }) {
@@ -813,7 +856,9 @@ function SessionList({
       const next = Math.max(selectedIndex - halfPage, 0);
       onSelect(next);
     } else if (key.return) {
-      onOpen(sessions[selectedIndex].id);
+      if (sessions[selectedIndex]) {
+        onOpen(sessions[selectedIndex].id);
+      }
     }
   }, { isActive });
   const scrollOffset = scrollOffsetRef.current;
@@ -846,7 +891,7 @@ function SessionList({
 
 // src/components/Sidebar.tsx
 import { jsx as jsx4, jsxs as jsxs3 } from "react/jsx-runtime";
-var FILTERS = ["All", "Active"];
+var FILTERS = ["All", "Active", "Archived"];
 function Sidebar({
   sessions,
   selectedIndex,
@@ -863,7 +908,7 @@ function Sidebar({
       FilterBar,
       {
         filters: FILTERS,
-        activeFilter: filter === "all" ? "All" : filter === "active" ? "Active" : "All",
+        activeFilter: filter === "all" ? "All" : filter === "active" ? "Active" : "Archived",
         onFilterChange
       }
     ),
@@ -1053,10 +1098,11 @@ var sections = [
     title: "Session List",
     shortcuts: [
       { keys: "j/k or \u2191/\u2193", description: "Navigate" },
+      { keys: "g/G", description: "First/Last" },
       { keys: "Enter", description: "Select" },
-      { keys: "f", description: "Filter" },
+      { keys: "f", description: "Cycle filter (All/Active/Archived)" },
       { keys: "t", description: "Timeline" },
-      { keys: "a", description: "Sub-agents" }
+      { keys: "a", description: "Activity" }
     ]
   },
   {
@@ -1078,9 +1124,7 @@ var sections = [
     title: "Task Detail",
     shortcuts: [
       { keys: "q/Esc", description: "Close" },
-      { keys: "Backspace", description: "Back" },
-      { keys: "n", description: "Note" },
-      { keys: "d", description: "Delete" }
+      { keys: "Backspace", description: "Back" }
     ]
   }
 ];
@@ -1255,9 +1299,275 @@ function TimelineOverlay({
 }
 
 // src/components/ActivityOverlay.tsx
-import { useState as useState5, useRef as useRef4 } from "react";
+import { useState as useState5, useRef as useRef4, useMemo as useMemo3 } from "react";
 import { Box as Box10, Text as Text9, useInput as useInput5, useStdout } from "ink";
-import { jsx as jsx10, jsxs as jsxs8 } from "react/jsx-runtime";
+
+// src/lib/activityService.ts
+import fs5 from "node:fs/promises";
+function extractResultText(content) {
+  if (typeof content === "string")
+    return content;
+  if (Array.isArray(content)) {
+    return content.map((item) => {
+      if (typeof item === "string")
+        return item;
+      if (typeof item?.text === "string")
+        return item.text;
+      return "";
+    }).join("\n");
+  }
+  return "";
+}
+async function parseActivity(jsonlPath) {
+  let content;
+  try {
+    content = await fs5.readFile(jsonlPath, "utf-8");
+  } catch {
+    return [];
+  }
+  const spawns = [];
+  const results = /* @__PURE__ */ new Map();
+  const agentIds = /* @__PURE__ */ new Map();
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed)
+      continue;
+    let row;
+    try {
+      row = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (row.type === "assistant" && row.message?.content && Array.isArray(row.message.content)) {
+      for (const block of row.message.content) {
+        if (block?.type !== "tool_use" || !block.id)
+          continue;
+        const input = block.input ?? {};
+        if (block.name === "Task" || block.name === "$AGENT") {
+          spawns.push({
+            id: block.id,
+            type: "subagent",
+            timestamp: row.timestamp ?? null,
+            subagentType: input.subagent_type ?? input.type ?? "unknown",
+            description: input.description ?? "",
+            prompt: input.prompt ?? "",
+            skillName: null,
+            skillArgs: null,
+            toolName: null
+          });
+        } else if (block.name === "Skill") {
+          spawns.push({
+            id: block.id,
+            type: "skill",
+            timestamp: row.timestamp ?? null,
+            subagentType: null,
+            description: input.skill ?? "unknown",
+            prompt: input.args ?? "",
+            skillName: input.skill ?? null,
+            skillArgs: input.args ?? null,
+            toolName: null
+          });
+        } else if (block.name.startsWith("mcp__")) {
+          spawns.push({
+            id: block.id,
+            type: "mcp",
+            timestamp: row.timestamp ?? null,
+            subagentType: null,
+            description: parseMcpPluginName(block.name),
+            prompt: summarizeToolInput(block.name, input),
+            skillName: null,
+            skillArgs: null,
+            toolName: block.name
+          });
+        } else {
+          spawns.push({
+            id: block.id,
+            type: "tool",
+            timestamp: row.timestamp ?? null,
+            subagentType: null,
+            description: block.name,
+            prompt: summarizeToolInput(block.name, input),
+            skillName: null,
+            skillArgs: null,
+            toolName: block.name
+          });
+        }
+      }
+    }
+    if (row.type === "user" && row.message?.content && Array.isArray(row.message.content)) {
+      for (const block of row.message.content) {
+        if (block?.type === "tool_result" && block.tool_use_id) {
+          const text = extractResultText(block.content);
+          results.set(block.tool_use_id, {
+            timestamp: row.timestamp ?? null,
+            content: text,
+            isError: block.is_error === true
+          });
+        }
+      }
+    }
+    if (row.type === "progress") {
+      const data = row.data ?? {};
+      if (data.type === "agent_progress" && data.parentToolUseID && data.agentId) {
+        agentIds.set(data.parentToolUseID, data.agentId);
+      }
+    }
+  }
+  const entries = spawns.map((spawn) => {
+    const result = results.get(spawn.id);
+    const agentId = agentIds.get(spawn.id) ?? null;
+    const isError = result?.isError ?? false;
+    let status;
+    if (!result) {
+      status = "running";
+    } else if (isError) {
+      status = "error";
+    } else {
+      status = "completed";
+    }
+    return {
+      id: spawn.id,
+      type: spawn.type,
+      timestamp: spawn.timestamp,
+      agentId,
+      subagentType: spawn.subagentType,
+      description: spawn.description,
+      prompt: spawn.prompt,
+      skillName: spawn.skillName,
+      skillArgs: spawn.skillArgs,
+      toolName: spawn.toolName,
+      status,
+      isError,
+      completedAt: result?.timestamp ?? null,
+      resultSummary: result ? result.content.slice(0, 200) : null
+    };
+  });
+  entries.sort((a, b) => {
+    if (!a.timestamp)
+      return -1;
+    if (!b.timestamp)
+      return 1;
+    return a.timestamp.localeCompare(b.timestamp);
+  });
+  return entries;
+}
+function parseMcpPluginName(name) {
+  const match = name.match(/^mcp__plugin_([^_]+)/);
+  return match ? match[1] : name;
+}
+function parseMcpFunctionName(name) {
+  const match = name.match(/__([^_]+)$/);
+  return match ? match[1] : name;
+}
+function summarizeToolInput(toolName, input) {
+  const baseName = toolName.startsWith("mcp__") ? parseMcpFunctionName(toolName) : toolName;
+  switch (baseName) {
+    case "Read":
+      return input.file_path ?? "";
+    case "Write":
+      return input.file_path ?? "";
+    case "Edit":
+      return input.file_path ?? "";
+    case "Bash":
+      return input.description ?? truncateStr(input.command ?? "", 120);
+    case "Glob":
+      return input.pattern ?? "";
+    case "Grep":
+      return input.pattern ?? "";
+    case "WebFetch":
+      return input.url ?? "";
+    case "WebSearch":
+      return input.query ?? "";
+    case "EnterPlanMode":
+      return "Enter plan mode";
+    case "ExitPlanMode":
+      return "Exit plan mode";
+    case "AskUserQuestion": {
+      const questions = input.questions;
+      if (Array.isArray(questions) && questions.length > 0) {
+        return questions[0].question ?? "";
+      }
+      return "";
+    }
+    case "TaskCreate":
+    case "TaskUpdate":
+    case "TaskGet":
+      return input.subject ?? input.taskId ?? "";
+    case "TaskList":
+      return "List tasks";
+    case "NotebookEdit":
+      return input.notebook_path ?? "";
+    case "EnterWorktree":
+      return input.name ?? "Create worktree";
+    default: {
+      const keys = Object.keys(input);
+      if (keys.length === 0)
+        return "";
+      const key = keys[0];
+      const val = input[key];
+      const str = typeof val === "string" ? val : JSON.stringify(val);
+      return truncateStr(`${key}: ${str}`, 120);
+    }
+  }
+}
+function truncateStr(s, max) {
+  if (s.length <= max)
+    return s;
+  return s.slice(0, max - 1) + "\u2026";
+}
+function parseTime(entry) {
+  const raw = entry.timestamp;
+  if (!raw)
+    return { start: NaN, end: NaN, raw: null };
+  const start = new Date(raw).getTime();
+  const end = entry.completedAt ? new Date(entry.completedAt).getTime() : Infinity;
+  return { start, end, raw };
+}
+function isOverlapping(a, b) {
+  if (!a.raw || !b.raw)
+    return false;
+  if (a.raw === b.raw)
+    return true;
+  if (Number.isNaN(a.start) || Number.isNaN(b.start))
+    return false;
+  return a.start < b.end && b.start < a.end;
+}
+function computeConcurrencyPrefixes(entries) {
+  if (entries.length === 0)
+    return [];
+  const times = entries.map(parseTime);
+  const prefixes = new Array(entries.length).fill("solo");
+  let groupStart = 0;
+  for (let i = 1; i < entries.length; i++) {
+    let overlaps = false;
+    for (let j = groupStart; j < i; j++) {
+      if (isOverlapping(times[j], times[i])) {
+        overlaps = true;
+        break;
+      }
+    }
+    if (!overlaps) {
+      finalizeGroup(prefixes, groupStart, i - 1);
+      groupStart = i;
+    }
+  }
+  finalizeGroup(prefixes, groupStart, entries.length - 1);
+  return prefixes;
+}
+function finalizeGroup(prefixes, start, end) {
+  if (start === end) {
+    prefixes[start] = "solo";
+    return;
+  }
+  prefixes[start] = "first";
+  for (let i = start + 1; i < end; i++) {
+    prefixes[i] = "middle";
+  }
+  prefixes[end] = "last";
+}
+
+// src/components/ActivityOverlay.tsx
+import { Fragment, jsx as jsx10, jsxs as jsxs8 } from "react/jsx-runtime";
 function formatTime(iso) {
   if (!iso)
     return "??:??";
@@ -1292,6 +1602,49 @@ function truncate2(text, maxLen) {
     return text;
   return text.slice(0, maxLen - 1) + "\u2026";
 }
+function entryIcon(entry) {
+  if (entry.status === "error")
+    return { icon: "\u2717", color: "red" };
+  if (entry.status === "running")
+    return { icon: "\u27F3", color: "yellow" };
+  return { icon: "\u2713", color: "green" };
+}
+function entryLabelColor(entry) {
+  switch (entry.type) {
+    case "skill":
+      return "magenta";
+    case "tool":
+      return "yellow";
+    case "mcp":
+      return "green";
+    default:
+      return "cyan";
+  }
+}
+function entryBadge(entry) {
+  switch (entry.type) {
+    case "skill":
+      return "[Skill]";
+    case "tool":
+      return `[${entry.toolName ?? "Tool"}]`;
+    case "mcp":
+      return `[${entry.description}]`;
+    default:
+      return `[${entry.subagentType ?? "Agent"}]`;
+  }
+}
+function graphChar(prefix) {
+  switch (prefix) {
+    case "first":
+      return "\u252C ";
+    case "middle":
+      return "\u251C ";
+    case "last":
+      return "\u2514 ";
+    default:
+      return "  ";
+  }
+}
 function ActivityOverlay({
   entries,
   sessionName,
@@ -1300,6 +1653,7 @@ function ActivityOverlay({
   const [selectedIndex, setSelectedIndex] = useState5(0);
   const scrollOffsetRef = useRef4(0);
   const { stdout } = useStdout();
+  const prefixes = useMemo3(() => computeConcurrencyPrefixes(entries), [entries]);
   const termRows = stdout?.rows ?? 24;
   const listVisibleHeight = Math.max(3, Math.floor((termRows - 8) / 2));
   if (entries.length <= listVisibleHeight) {
@@ -1328,16 +1682,19 @@ function ActivityOverlay({
       setSelectedIndex(entries.length - 1);
     }
   });
+  const subagents = entries.filter((e) => e.type === "subagent");
+  const skills = entries.filter((e) => e.type === "skill");
+  const tools = entries.filter((e) => e.type === "tool");
+  const mcps = entries.filter((e) => e.type === "mcp");
   const running = entries.filter((e) => e.status === "running").length;
-  const completed = entries.filter((e) => e.status === "completed").length;
   if (entries.length === 0) {
     return /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", padding: 1, children: [
       /* @__PURE__ */ jsxs8(Text9, { bold: true, children: [
-        "Sub-agents \u2500 ",
+        "Activity \u2500 ",
         sessionName
       ] }),
       /* @__PURE__ */ jsx10(Text9, { children: " " }),
-      /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "No sub-agents spawned in this session" }),
+      /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "No activity recorded in this session" }),
       /* @__PURE__ */ jsx10(Text9, { children: " " }),
       /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Press q or Esc to close" })
     ] });
@@ -1350,13 +1707,19 @@ function ActivityOverlay({
   const resultLines = selected.resultSummary ? selected.resultSummary.split("\n").slice(0, 5) : [];
   return /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", padding: 1, children: [
     /* @__PURE__ */ jsxs8(Text9, { bold: true, children: [
-      "Sub-agents \u2500 ",
+      "Activity \u2500 ",
       entries.length,
       " total \u2502 ",
+      subagents.length,
+      " agents \u2502 ",
+      skills.length,
+      " skills \u2502 ",
+      tools.length,
+      " tools \u2502 ",
+      mcps.length,
+      " mcp \u2502 ",
       running,
-      " running \u2502 ",
-      completed,
-      " completed"
+      " running"
     ] }),
     /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "j/k:navigate  g/G:first/last  q/Esc:close" }),
     /* @__PURE__ */ jsx10(Text9, { children: " " }),
@@ -1369,19 +1732,23 @@ function ActivityOverlay({
       visibleSlice.map((entry, i) => {
         const realIndex = (needsWindowing ? scrollOffset : 0) + i;
         const isSel = realIndex === selectedIndex;
-        const icon = entry.status === "completed" ? "\u2713" : "\u27F3";
-        const iconColor = entry.status === "completed" ? "green" : "yellow";
+        const { icon, color: iconColor } = entryIcon(entry);
+        const labelColor = entryLabelColor(entry);
+        const badge = entryBadge(entry);
         const duration = formatDuration(entry.timestamp, entry.completedAt);
         const desc = truncate2(entry.description, 30);
-        const agentType = entry.subagentType.padEnd(16).slice(0, 16);
+        const badgePad = badge.padEnd(16).slice(0, 16);
         return /* @__PURE__ */ jsxs8(Box10, { children: [
-          /* @__PURE__ */ jsx10(Text9, { color: isSel ? "cyan" : void 0, bold: isSel, children: isSel ? "\u203A " : "  " }),
+          /* @__PURE__ */ jsx10(Text9, { color: isSel ? labelColor : void 0, bold: isSel, children: isSel ? "\u203A " : "  " }),
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: graphChar(prefixes[realIndex]) }),
           /* @__PURE__ */ jsx10(Text9, { color: iconColor, children: icon }),
-          /* @__PURE__ */ jsxs8(Text9, { color: isSel ? "cyan" : void 0, bold: isSel, children: [
+          /* @__PURE__ */ jsxs8(Text9, { color: isSel ? labelColor : void 0, bold: isSel, children: [
             " ",
             formatTime(entry.timestamp),
-            "  ",
-            agentType,
+            "  "
+          ] }),
+          /* @__PURE__ */ jsx10(Text9, { color: labelColor, children: badgePad }),
+          /* @__PURE__ */ jsxs8(Text9, { color: isSel ? labelColor : void 0, bold: isSel, children: [
             " ",
             desc
           ] }),
@@ -1389,7 +1756,7 @@ function ActivityOverlay({
             " ",
             duration
           ] })
-        ] }, entry.spawnId);
+        ] }, entry.id);
       }),
       needsWindowing && scrollOffset + listVisibleHeight < entries.length && /* @__PURE__ */ jsxs8(Text9, { dimColor: true, children: [
         "  \u25BC ",
@@ -1399,134 +1766,107 @@ function ActivityOverlay({
     ] }),
     /* @__PURE__ */ jsx10(Text9, { children: " " }),
     /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", children: [
-      /* @__PURE__ */ jsx10(Text9, { bold: true, underline: true, children: selected.description || "Sub-agent detail" }),
+      /* @__PURE__ */ jsx10(Text9, { bold: true, underline: true, children: selected.description || "Activity detail" }),
       /* @__PURE__ */ jsx10(Text9, { children: " " }),
-      /* @__PURE__ */ jsxs8(Text9, { children: [
-        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Type:    " }),
-        /* @__PURE__ */ jsx10(Text9, { children: selected.subagentType })
-      ] }),
-      /* @__PURE__ */ jsxs8(Text9, { children: [
-        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Status:  " }),
-        /* @__PURE__ */ jsx10(Text9, { color: selected.status === "completed" ? "green" : "yellow", children: selected.status === "completed" ? "\u2713 Completed" : "\u27F3 Running" })
-      ] }),
-      /* @__PURE__ */ jsxs8(Text9, { children: [
-        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Spawned: " }),
-        /* @__PURE__ */ jsx10(Text9, { children: formatTimestamp2(selected.timestamp) })
-      ] }),
-      selected.completedAt && /* @__PURE__ */ jsxs8(Text9, { children: [
-        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Duration:" }),
+      selected.type === "subagent" ? /* @__PURE__ */ jsxs8(Fragment, { children: [
         /* @__PURE__ */ jsxs8(Text9, { children: [
-          " ",
-          formatDuration(selected.timestamp, selected.completedAt)
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Type:    " }),
+          /* @__PURE__ */ jsx10(Text9, { children: selected.subagentType })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Status:  " }),
+          /* @__PURE__ */ jsx10(Text9, { color: selected.status === "completed" ? "green" : selected.status === "error" ? "red" : "yellow", children: selected.status === "completed" ? "\u2713 Completed" : selected.status === "error" ? "\u2717 Error" : "\u27F3 Running" })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Spawned: " }),
+          /* @__PURE__ */ jsx10(Text9, { children: formatTimestamp2(selected.timestamp) })
+        ] }),
+        selected.completedAt && /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Duration:" }),
+          /* @__PURE__ */ jsxs8(Text9, { children: [
+            " ",
+            formatDuration(selected.timestamp, selected.completedAt)
+          ] })
+        ] }),
+        selected.agentId && /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Agent:   " }),
+          /* @__PURE__ */ jsx10(Text9, { children: selected.agentId.slice(0, 7) })
+        ] })
+      ] }) : selected.type === "skill" ? /* @__PURE__ */ jsxs8(Fragment, { children: [
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Skill:   " }),
+          /* @__PURE__ */ jsx10(Text9, { color: "magenta", children: selected.skillName })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Status:  " }),
+          /* @__PURE__ */ jsx10(Text9, { color: selected.status === "completed" ? "green" : selected.status === "error" ? "red" : "yellow", children: selected.status === "completed" ? "\u2713 Completed" : selected.status === "error" ? "\u2717 Error" : "\u27F3 Running" })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Invoked: " }),
+          /* @__PURE__ */ jsx10(Text9, { children: formatTimestamp2(selected.timestamp) })
+        ] }),
+        selected.skillArgs && /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Args:    " }),
+          /* @__PURE__ */ jsx10(Text9, { children: selected.skillArgs })
+        ] })
+      ] }) : selected.type === "tool" ? /* @__PURE__ */ jsxs8(Fragment, { children: [
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Tool:    " }),
+          /* @__PURE__ */ jsx10(Text9, { color: "yellow", children: selected.toolName })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Status:  " }),
+          /* @__PURE__ */ jsx10(Text9, { color: selected.status === "completed" ? "green" : selected.status === "error" ? "red" : "yellow", children: selected.status === "completed" ? "\u2713 Completed" : selected.status === "error" ? "\u2717 Error" : "\u27F3 Running" })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Called:  " }),
+          /* @__PURE__ */ jsx10(Text9, { children: formatTimestamp2(selected.timestamp) })
+        ] }),
+        selected.completedAt && /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Duration:" }),
+          /* @__PURE__ */ jsxs8(Text9, { children: [
+            " ",
+            formatDuration(selected.timestamp, selected.completedAt)
+          ] })
+        ] })
+      ] }) : /* @__PURE__ */ jsxs8(Fragment, { children: [
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Plugin:  " }),
+          /* @__PURE__ */ jsx10(Text9, { color: "green", children: selected.description })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Function:" }),
+          /* @__PURE__ */ jsxs8(Text9, { children: [
+            " ",
+            parseMcpFunctionName(selected.toolName ?? "")
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Status:  " }),
+          /* @__PURE__ */ jsx10(Text9, { color: selected.status === "completed" ? "green" : selected.status === "error" ? "red" : "yellow", children: selected.status === "completed" ? "\u2713 Completed" : selected.status === "error" ? "\u2717 Error" : "\u27F3 Running" })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Called:  " }),
+          /* @__PURE__ */ jsx10(Text9, { children: formatTimestamp2(selected.timestamp) })
+        ] }),
+        selected.completedAt && /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Duration:" }),
+          /* @__PURE__ */ jsxs8(Text9, { children: [
+            " ",
+            formatDuration(selected.timestamp, selected.completedAt)
+          ] })
         ] })
       ] }),
-      selected.agentId && /* @__PURE__ */ jsxs8(Text9, { children: [
-        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Agent:   " }),
-        /* @__PURE__ */ jsx10(Text9, { children: selected.agentId.slice(0, 7) })
-      ] }),
       promptLines.length > 0 && /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", marginTop: 1, children: [
-        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Prompt:" }),
+        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: selected.type === "skill" ? "Args:" : selected.type === "tool" || selected.type === "mcp" ? "Input:" : "Prompt:" }),
         promptLines.map((line, i) => /* @__PURE__ */ jsx10(Text9, { wrap: "truncate", children: line }, i))
       ] }),
       resultLines.length > 0 && /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", marginTop: 1, children: [
         /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Result:" }),
-        resultLines.map((line, i) => /* @__PURE__ */ jsx10(Text9, { color: "green", wrap: "truncate", children: line }, i))
+        resultLines.map((line, i) => /* @__PURE__ */ jsx10(Text9, { color: selected.isError ? "red" : "green", wrap: "truncate", children: line }, i))
       ] })
     ] })
   ] });
-}
-
-// src/lib/activityService.ts
-import fs4 from "node:fs/promises";
-async function parseSubAgents(jsonlPath) {
-  let content;
-  try {
-    content = await fs4.readFile(jsonlPath, "utf-8");
-  } catch {
-    return [];
-  }
-  const spawns = [];
-  const results = /* @__PURE__ */ new Map();
-  const agentIds = /* @__PURE__ */ new Map();
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed)
-      continue;
-    let row;
-    try {
-      row = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    if (row.type === "assistant" && row.message?.content && Array.isArray(row.message.content)) {
-      for (const block of row.message.content) {
-        if (block?.type === "tool_use" && block.name === "Task" && block.id) {
-          const input = block.input ?? {};
-          spawns.push({
-            spawnId: block.id,
-            timestamp: row.timestamp ?? null,
-            subagentType: input.subagent_type ?? "unknown",
-            description: input.description ?? "",
-            prompt: input.prompt ?? ""
-          });
-        }
-      }
-    }
-    if (row.type === "user" && row.message?.content && Array.isArray(row.message.content)) {
-      for (const block of row.message.content) {
-        if (block?.type === "tool_result" && block.tool_use_id) {
-          const text = extractResultText(block.content);
-          results.set(block.tool_use_id, {
-            timestamp: row.timestamp ?? null,
-            content: text
-          });
-        }
-      }
-    }
-    if (row.type === "progress") {
-      const data = row.data ?? {};
-      if (data.type === "agent_progress" && data.parentToolUseID && data.agentId) {
-        agentIds.set(data.parentToolUseID, data.agentId);
-      }
-    }
-  }
-  const entries = spawns.map((spawn) => {
-    const result = results.get(spawn.spawnId);
-    const agentId = agentIds.get(spawn.spawnId) ?? null;
-    return {
-      spawnId: spawn.spawnId,
-      agentId,
-      timestamp: spawn.timestamp,
-      subagentType: spawn.subagentType,
-      description: spawn.description,
-      prompt: spawn.prompt,
-      status: result ? "completed" : "running",
-      completedAt: result?.timestamp ?? null,
-      resultSummary: result ? result.content.slice(0, 200) : null
-    };
-  });
-  entries.sort((a, b) => {
-    if (!a.timestamp)
-      return -1;
-    if (!b.timestamp)
-      return 1;
-    return a.timestamp.localeCompare(b.timestamp);
-  });
-  return entries;
-}
-function extractResultText(content) {
-  if (typeof content === "string")
-    return content;
-  if (Array.isArray(content)) {
-    return content.map((item) => {
-      if (typeof item === "string")
-        return item;
-      if (typeof item?.text === "string")
-        return item.text;
-      return "";
-    }).join("\n");
-  }
-  return "";
 }
 
 // src/App.tsx
@@ -1546,6 +1886,13 @@ function App({ claudeDir, projectPath }) {
   const [showActivity, setShowActivity] = useState6(false);
   const [activityEntries, setActivityEntries] = useState6([]);
   const [activityLoading, setActivityLoading] = useState6(false);
+  const filteredSessions = useMemo4(() => {
+    if (filter === "all")
+      return sessions;
+    if (filter === "active")
+      return sessions.filter((s) => !s.isArchived);
+    return sessions.filter((s) => s.isArchived);
+  }, [sessions, filter]);
   const prevSessionsRef = useRef5([]);
   useEffect3(() => {
     const prev = prevSessionsRef.current;
@@ -1563,11 +1910,11 @@ function App({ claudeDir, projectPath }) {
   const handleSelectSession = useCallback3(
     (index) => {
       setSelectedSessionIndex(index);
-      if (sessions[index]) {
-        selectSession(sessions[index].id);
+      if (filteredSessions[index]) {
+        selectSession(filteredSessions[index].id);
       }
     },
-    [sessions, selectSession]
+    [filteredSessions, selectSession]
   );
   const handleOpenSession = useCallback3(
     (id) => {
@@ -1577,11 +1924,13 @@ function App({ claudeDir, projectPath }) {
     [selectSession]
   );
   const handleFilterChange = useCallback3((newFilter) => {
-    const normalized = newFilter.toLowerCase();
-    setFilter(normalized);
+    const lower = newFilter.toLowerCase();
+    if (lower === "all" || lower === "active" || lower === "archived") {
+      setFilter(lower);
+    }
   }, []);
   const handleOpenTimeline = useCallback3(async () => {
-    const session = sessions[selectedSessionIndex];
+    const session = filteredSessions[selectedSessionIndex];
     if (!session?.jsonlPath)
       return;
     setTimelineLoading(true);
@@ -1593,20 +1942,20 @@ function App({ claudeDir, projectPath }) {
     } finally {
       setTimelineLoading(false);
     }
-  }, [sessions, selectedSessionIndex]);
+  }, [filteredSessions, selectedSessionIndex]);
   const handleOpenActivity = useCallback3(async () => {
-    const session = sessions[selectedSessionIndex];
+    const session = filteredSessions[selectedSessionIndex];
     if (!session?.jsonlPath)
       return;
     setActivityLoading(true);
     try {
-      const entries = await parseSubAgents(session.jsonlPath);
+      const entries = await parseActivity(session.jsonlPath);
       setActivityEntries(entries);
       setShowActivity(true);
     } finally {
       setActivityLoading(false);
     }
-  }, [sessions, selectedSessionIndex]);
+  }, [filteredSessions, selectedSessionIndex]);
   useInput6((input, key) => {
     if (showHelp) {
       if (key.escape || input === "?" || input === "q") {
@@ -1628,11 +1977,22 @@ function App({ claudeDir, projectPath }) {
       setShowHelp(true);
       return;
     }
-    if (input === "t" && focusedPanel === "sidebar" && sessions.length > 0) {
+    if (input === "f" && focusedPanel === "sidebar") {
+      setFilter((prev) => {
+        if (prev === "all")
+          return "active";
+        if (prev === "active")
+          return "archived";
+        return "all";
+      });
+      setSelectedSessionIndex(0);
+      return;
+    }
+    if (input === "t" && focusedPanel === "sidebar" && filteredSessions.length > 0) {
       handleOpenTimeline();
       return;
     }
-    if (input === "a" && focusedPanel === "sidebar" && sessions.length > 0) {
+    if (input === "a" && focusedPanel === "sidebar" && filteredSessions.length > 0) {
       handleOpenActivity();
       return;
     }
@@ -1645,9 +2005,9 @@ function App({ claudeDir, projectPath }) {
   const doneTasks = currentTasks.filter((t) => t.status === "completed").length;
   const activeTasks = currentTasks.filter((t) => t.status === "in_progress").length;
   const pendingTasks = currentTasks.filter((t) => t.status === "pending").length;
-  const clampedIndex = sessions.length > 0 ? Math.min(selectedSessionIndex, sessions.length - 1) : 0;
-  const selectedSession = sessions[clampedIndex];
-  const projectName = useMemo3(() => projectPath ? path5.basename(projectPath) : null, [projectPath]);
+  const clampedIndex = filteredSessions.length > 0 ? Math.min(selectedSessionIndex, filteredSessions.length - 1) : 0;
+  const selectedSession = filteredSessions[clampedIndex];
+  const projectName = useMemo4(() => projectPath ? path5.basename(projectPath) : null, [projectPath]);
   if (showHelp) {
     return /* @__PURE__ */ jsx11(Box11, { flexDirection: "column", children: /* @__PURE__ */ jsx11(Panel, { title: "Help", borderColor: "yellow", children: /* @__PURE__ */ jsx11(HelpOverlay, { onClose: () => setShowHelp(false) }) }) });
   }
@@ -1662,7 +2022,7 @@ function App({ claudeDir, projectPath }) {
     ) }) });
   }
   if (showActivity) {
-    return /* @__PURE__ */ jsx11(Box11, { flexDirection: "column", children: /* @__PURE__ */ jsx11(Panel, { title: "Sub-agents", borderColor: "blue", children: /* @__PURE__ */ jsx11(
+    return /* @__PURE__ */ jsx11(Box11, { flexDirection: "column", children: /* @__PURE__ */ jsx11(Panel, { title: "Activity", borderColor: "blue", children: /* @__PURE__ */ jsx11(
       ActivityOverlay,
       {
         entries: activityEntries,
@@ -1683,7 +2043,7 @@ function App({ claudeDir, projectPath }) {
         "\u27F3 ",
         timelineLoading ? "loading timeline..." : activityLoading ? "loading agents..." : "loading..."
       ] }) : /* @__PURE__ */ jsxs9(Text10, { dimColor: true, children: [
-        sessions.length,
+        filteredSessions.length,
         " sessions",
         selectedSession ? ` \u2502 ${selectedSession.name ?? selectedSession.id}` : "",
         selectedSession?.gitBranch ? ` (${selectedSession.gitBranch})` : "",
@@ -1698,14 +2058,14 @@ function App({ claudeDir, projectPath }) {
       /* @__PURE__ */ jsx11(Box11, { width: 32, children: /* @__PURE__ */ jsx11(
         Panel,
         {
-          title: `Sessions (${sessions.length > 0 ? clampedIndex + 1 : 0}/${sessions.length})`,
+          title: `Sessions (${filteredSessions.length > 0 ? clampedIndex + 1 : 0}/${filteredSessions.length})`,
           borderColor: focusedPanel === "sidebar" ? "cyan" : "gray",
           focused: focusedPanel === "sidebar",
           children: /* @__PURE__ */ jsx11(
             Sidebar,
             {
-              sessions,
-              selectedIndex: selectedSessionIndex,
+              sessions: filteredSessions,
+              selectedIndex: clampedIndex,
               onSelect: handleSelectSession,
               onOpen: handleOpenSession,
               filter,
@@ -1728,7 +2088,7 @@ function App({ claudeDir, projectPath }) {
     ] }),
     /* @__PURE__ */ jsx11(Box11, { children: /* @__PURE__ */ jsxs9(Text10, { backgroundColor: "gray", color: "white", children: [
       " ",
-      focusedPanel === "sidebar" ? "j/k:navigate  g/G:first/last  t:timeline  a:agents  Enter:select  Tab:\u2192kanban  ?:help  q:quit" : "h/j/k/l:navigate  Enter:open  Tab:\u2192sessions  Esc:back  ?:help  q:quit",
+      focusedPanel === "sidebar" ? "j/k:navigate  g/G:first/last  f:filter  t:timeline  a:activity  Enter:select  Tab:\u2192kanban  ?:help  q:quit" : "h/j/k/l:navigate  Enter:open  Tab:\u2192sessions  Esc:back  ?:help  q:quit",
       " "
     ] }) })
   ] });

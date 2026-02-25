@@ -2,21 +2,86 @@ import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { ActivityOverlay } from '../../../src/components/ActivityOverlay.js';
-import type { SubAgentEntry } from '../../../src/lib/types.js';
+import type { ActivityEntry } from '../../../src/lib/types.js';
 
 const delay = () => new Promise((r) => setTimeout(r, 0));
 
-function makeEntry(overrides?: Partial<SubAgentEntry>): SubAgentEntry {
+function makeEntry(overrides?: Partial<ActivityEntry>): ActivityEntry {
   return {
-    spawnId: 'toolu_test',
+    id: 'toolu_test',
+    type: 'subagent',
     agentId: null,
     timestamp: '2026-02-25T10:00:00Z',
     subagentType: 'Explore',
     description: 'Explore codebase',
     prompt: 'Search for relevant files',
+    skillName: null,
+    skillArgs: null,
+    toolName: null,
     status: 'completed',
+    isError: false,
     completedAt: '2026-02-25T10:01:00Z',
     resultSummary: 'Found 5 relevant files',
+    ...overrides,
+  };
+}
+
+function makeSkillEntry(overrides?: Partial<ActivityEntry>): ActivityEntry {
+  return {
+    id: 'toolu_skill',
+    type: 'skill',
+    agentId: null,
+    timestamp: '2026-02-25T10:00:00Z',
+    subagentType: null,
+    description: 'commit',
+    prompt: '-m "fix bug"',
+    skillName: 'commit',
+    skillArgs: '-m "fix bug"',
+    toolName: null,
+    status: 'completed',
+    isError: false,
+    completedAt: '2026-02-25T10:00:05Z',
+    resultSummary: 'Committed successfully',
+    ...overrides,
+  };
+}
+
+function makeToolEntry(overrides?: Partial<ActivityEntry>): ActivityEntry {
+  return {
+    id: 'toolu_tool',
+    type: 'tool',
+    agentId: null,
+    timestamp: '2026-02-25T10:00:00Z',
+    subagentType: null,
+    description: 'Read',
+    prompt: '/src/index.ts',
+    skillName: null,
+    skillArgs: null,
+    toolName: 'Read',
+    status: 'completed',
+    isError: false,
+    completedAt: '2026-02-25T10:00:01Z',
+    resultSummary: 'File contents...',
+    ...overrides,
+  };
+}
+
+function makeMcpEntry(overrides?: Partial<ActivityEntry>): ActivityEntry {
+  return {
+    id: 'toolu_mcp',
+    type: 'mcp',
+    agentId: null,
+    timestamp: '2026-02-25T10:00:00Z',
+    subagentType: null,
+    description: 'context7',
+    prompt: 'libraryId: /vercel/next.js',
+    skillName: null,
+    skillArgs: null,
+    toolName: 'mcp__plugin_context7_context7__query-docs',
+    status: 'completed',
+    isError: false,
+    completedAt: '2026-02-25T10:00:02Z',
+    resultSummary: 'Documentation found',
     ...overrides,
   };
 }
@@ -31,13 +96,13 @@ describe('ActivityOverlay', () => {
       }),
     );
     const output = lastFrame()!;
-    expect(output).toContain('No sub-agents spawned');
+    expect(output).toContain('No activity recorded');
   });
 
   it('renders list of sub-agents with correct status icons', () => {
     const entries = [
-      makeEntry({ spawnId: 'a', status: 'completed', description: 'Done task' }),
-      makeEntry({ spawnId: 'b', status: 'running', description: 'Active task', completedAt: null, resultSummary: null }),
+      makeEntry({ id: 'a', status: 'completed', description: 'Done task' }),
+      makeEntry({ id: 'b', status: 'running', description: 'Active task', completedAt: null, resultSummary: null }),
     ];
     const { lastFrame } = render(
       React.createElement(ActivityOverlay, {
@@ -53,11 +118,13 @@ describe('ActivityOverlay', () => {
     expect(output).toContain('Active task');
   });
 
-  it('shows summary counts in header', () => {
+  it('shows unified summary counts in header', () => {
     const entries = [
-      makeEntry({ spawnId: 'a', status: 'completed' }),
-      makeEntry({ spawnId: 'b', status: 'running', completedAt: null }),
-      makeEntry({ spawnId: 'c', status: 'completed' }),
+      makeEntry({ id: 'a', status: 'completed' }),
+      makeEntry({ id: 'b', status: 'running', completedAt: null }),
+      makeSkillEntry({ id: 'c', status: 'completed' }),
+      makeToolEntry({ id: 'd', status: 'completed' }),
+      makeMcpEntry({ id: 'e', status: 'completed' }),
     ];
     const { lastFrame } = render(
       React.createElement(ActivityOverlay, {
@@ -67,15 +134,18 @@ describe('ActivityOverlay', () => {
       }),
     );
     const output = lastFrame()!;
-    expect(output).toContain('3 total');
+    expect(output).toContain('5 total');
+    expect(output).toContain('2 agents');
+    expect(output).toContain('1 skills');
+    expect(output).toContain('1 tools');
+    expect(output).toContain('1 mcp');
     expect(output).toContain('1 running');
-    expect(output).toContain('2 completed');
   });
 
   it('j/k navigation changes selection', async () => {
     const entries = [
-      makeEntry({ spawnId: 'a', description: 'First agent' }),
-      makeEntry({ spawnId: 'b', description: 'Second agent', prompt: 'Second prompt text' }),
+      makeEntry({ id: 'a', description: 'First agent' }),
+      makeEntry({ id: 'b', description: 'Second agent', prompt: 'Second prompt text' }),
     ];
     const { stdin, lastFrame } = render(
       React.createElement(ActivityOverlay, {
@@ -85,7 +155,6 @@ describe('ActivityOverlay', () => {
       }),
     );
 
-    // Initial: first item selected, detail shows first agent
     let output = lastFrame()!;
     expect(output).toContain('First agent');
 
@@ -94,7 +163,6 @@ describe('ActivityOverlay', () => {
     await delay();
 
     output = lastFrame()!;
-    // Detail panel should show second agent info
     expect(output).toContain('Second prompt text');
   });
 
@@ -134,7 +202,7 @@ describe('ActivityOverlay', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('shows detail panel with agent info', () => {
+  it('shows sub-agent detail panel with agent info', () => {
     const entries = [
       makeEntry({
         subagentType: 'general-purpose',
@@ -190,5 +258,230 @@ describe('ActivityOverlay', () => {
       }),
     );
     expect(lastFrame()!).toContain('My Project');
+  });
+
+  // New tests for mixed activity entries
+
+  it('renders skill entries with [Skill] badge', () => {
+    const entries = [makeSkillEntry({ id: 'sk1', description: 'commit' })];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('[Skill]');
+    expect(output).toContain('commit');
+  });
+
+  it('shows skill detail panel with skill-specific fields', () => {
+    const entries = [
+      makeSkillEntry({
+        skillName: 'review-loop',
+        skillArgs: '--strict',
+        description: 'review-loop',
+        timestamp: '2026-02-25T14:00:00Z',
+        completedAt: '2026-02-25T14:00:30Z',
+        resultSummary: 'Review passed',
+      }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('review-loop');
+    expect(output).toContain('--strict');
+    expect(output).toContain('Completed');
+    expect(output).toContain('Review passed');
+  });
+
+  it('renders error status for failed skill', () => {
+    const entries = [
+      makeSkillEntry({
+        id: 'err1',
+        status: 'error',
+        isError: true,
+        resultSummary: 'Skill not found',
+      }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('✗');
+    expect(output).toContain('Error');
+    expect(output).toContain('Skill not found');
+  });
+
+  it('renders mixed sub-agent and skill entries', () => {
+    const entries = [
+      makeEntry({ id: 'a1', description: 'Explore codebase', subagentType: 'Explore' }),
+      makeSkillEntry({ id: 's1', description: 'commit' }),
+      makeEntry({ id: 'a2', description: 'Plan feature', subagentType: 'Plan' }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Mixed',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('[Explore]');
+    expect(output).toContain('[Skill]');
+    expect(output).toContain('[Plan]');
+    expect(output).toContain('2 agents');
+    expect(output).toContain('1 skills');
+  });
+
+  it('renders tool entries with [ToolName] badge', () => {
+    const entries = [
+      makeToolEntry({ id: 't1', toolName: 'Read', description: 'Read' }),
+      makeToolEntry({ id: 't2', toolName: 'Bash', description: 'Bash', prompt: 'Run tests' }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('[Read]');
+    expect(output).toContain('2 tools');
+  });
+
+  it('renders mcp entries with [pluginName] badge', () => {
+    const entries = [makeMcpEntry({ id: 'm1', description: 'context7' })];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('[context7]');
+    expect(output).toContain('1 mcp');
+  });
+
+  it('shows tool detail panel with tool-specific fields', () => {
+    const entries = [
+      makeToolEntry({
+        toolName: 'Bash',
+        description: 'Bash',
+        prompt: 'npm test',
+        timestamp: '2026-02-25T14:00:00Z',
+        completedAt: '2026-02-25T14:00:30Z',
+        resultSummary: 'All tests passed',
+      }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('Bash');
+    expect(output).toContain('Completed');
+    expect(output).toContain('npm test');
+    expect(output).toContain('All tests passed');
+  });
+
+  it('shows mcp detail panel with plugin and function', () => {
+    const entries = [
+      makeMcpEntry({
+        description: 'context7',
+        toolName: 'mcp__plugin_context7_context7__query-docs',
+        prompt: 'libraryId: /vercel/next.js',
+        resultSummary: 'Docs retrieved',
+      }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('context7');
+    expect(output).toContain('query-docs');
+    expect(output).toContain('Completed');
+    expect(output).toContain('Docs retrieved');
+  });
+
+  it('renders all four types in a mixed session', () => {
+    const entries = [
+      makeEntry({ id: 'a1', subagentType: 'Explore' }),
+      makeSkillEntry({ id: 's1' }),
+      makeToolEntry({ id: 't1', toolName: 'Grep' }),
+      makeMcpEntry({ id: 'm1', description: 'claude-mem' }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Full',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('[Explore]');
+    expect(output).toContain('[Skill]');
+    expect(output).toContain('[Grep]');
+    expect(output).toContain('[claude-mem]');
+    expect(output).toContain('4 total');
+  });
+
+  it('shows graph markers for concurrent entries', () => {
+    const entries = [
+      makeToolEntry({ id: 't1', timestamp: '2026-02-25T10:00:00Z', completedAt: '2026-02-25T10:00:01Z', toolName: 'Read', description: 'Read' }),
+      makeToolEntry({ id: 't2', timestamp: '2026-02-25T10:01:00Z', completedAt: '2026-02-25T10:01:10Z', toolName: 'Explore', description: 'Explore' }),
+      makeToolEntry({ id: 't3', timestamp: '2026-02-25T10:01:00Z', completedAt: '2026-02-25T10:01:05Z', toolName: 'Bash', description: 'Bash' }),
+      makeToolEntry({ id: 't4', timestamp: '2026-02-25T10:01:00Z', completedAt: '2026-02-25T10:01:03Z', toolName: 'Grep', description: 'Grep' }),
+      makeToolEntry({ id: 't5', timestamp: '2026-02-25T10:02:00Z', completedAt: '2026-02-25T10:02:01Z', toolName: 'Read', description: 'Read' }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Graph',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    // The concurrent group (t2, t3, t4) should have ┬, ├, └
+    expect(output).toContain('┬');
+    expect(output).toContain('├');
+    expect(output).toContain('└');
+  });
+
+  it('does not show graph markers for sequential entries', () => {
+    const entries = [
+      makeToolEntry({ id: 't1', timestamp: '2026-02-25T10:00:00Z', completedAt: '2026-02-25T10:00:01Z' }),
+      makeToolEntry({ id: 't2', timestamp: '2026-02-25T10:01:00Z', completedAt: '2026-02-25T10:01:01Z' }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Sequential',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).not.toContain('┬');
+    expect(output).not.toContain('├');
+    expect(output).not.toContain('└');
   });
 });

@@ -1,5 +1,7 @@
 export type TaskStatus = 'pending' | 'in_progress' | 'completed';
 
+export type GraphPrefix = 'solo' | 'first' | 'middle' | 'last';
+
 export interface Task {
   id: string;
   subject: string;
@@ -29,6 +31,7 @@ export interface Session {
   createdAt: string | null;
   modifiedAt: string;
   isArchived: boolean;
+  isLive: boolean;
   jsonlPath: string | null;
 }
 
@@ -89,6 +92,27 @@ export interface SubAgentEntry {
   status: 'running' | 'completed';
   completedAt: string | null;
   resultSummary: string | null; // first ~200 chars of tool_result content
+}
+
+export interface ActivityEntry {
+  id: string;                    // tool_use id
+  type: 'subagent' | 'skill' | 'tool' | 'mcp';
+  timestamp: string | null;
+  // Sub-agent fields
+  agentId: string | null;
+  subagentType: string | null;   // "Explore", "Plan", etc.
+  description: string;           // input.description or skill name or tool summary
+  prompt: string;                // input.prompt or input.args or tool input summary
+  // Skill fields
+  skillName: string | null;      // input.skill
+  skillArgs: string | null;      // input.args
+  // Tool/MCP fields
+  toolName: string | null;       // raw tool name (e.g. "Read", "mcp__plugin_context7...")
+  // Shared
+  status: 'running' | 'completed' | 'error';
+  isError: boolean;
+  completedAt: string | null;
+  resultSummary: string | null;
 }
 
 export interface TaskSnapshot {
