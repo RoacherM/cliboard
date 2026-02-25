@@ -1628,7 +1628,7 @@ function entryBadge(entry) {
     case "tool":
       return `[${entry.toolName ?? "Tool"}]`;
     case "mcp":
-      return `[${entry.description}]`;
+      return `[${parseMcpFunctionName(entry.toolName ?? "")}]`;
     default:
       return `[${entry.subagentType ?? "Agent"}]`;
   }

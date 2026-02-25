@@ -371,7 +371,7 @@ describe('ActivityOverlay', () => {
       }),
     );
     const output = lastFrame()!;
-    expect(output).toContain('[context7]');
+    expect(output).toContain('[query-docs]');
     expect(output).toContain('1 mcp');
   });
 
@@ -428,7 +428,7 @@ describe('ActivityOverlay', () => {
       makeEntry({ id: 'a1', subagentType: 'Explore' }),
       makeSkillEntry({ id: 's1' }),
       makeToolEntry({ id: 't1', toolName: 'Grep' }),
-      makeMcpEntry({ id: 'm1', description: 'claude-mem' }),
+      makeMcpEntry({ id: 'm1', description: 'claude-mem', toolName: 'mcp__plugin_claude-mem_mcp-search__search' }),
     ];
     const { lastFrame } = render(
       React.createElement(ActivityOverlay, {
@@ -441,7 +441,7 @@ describe('ActivityOverlay', () => {
     expect(output).toContain('[Explore]');
     expect(output).toContain('[Skill]');
     expect(output).toContain('[Grep]');
-    expect(output).toContain('[claude-mem]');
+    expect(output).toContain('[search]');
     expect(output).toContain('4 total');
   });
 

@@ -58,7 +58,7 @@ function entryBadge(entry: ActivityEntry): string {
   switch (entry.type) {
     case 'skill': return '[Skill]';
     case 'tool': return `[${entry.toolName ?? 'Tool'}]`;
-    case 'mcp': return `[${entry.description}]`;
+    case 'mcp': return `[${parseMcpFunctionName(entry.toolName ?? '')}]`;
     default: return `[${entry.subagentType ?? 'Agent'}]`;
   }
 }
