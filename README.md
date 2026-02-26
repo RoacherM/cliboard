@@ -1,8 +1,8 @@
 # CLIboard
 
-A terminal dashboard for monitoring [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions and tasks. Think lazygit, but for your AI coding agent's task lists.
+A terminal dashboard for monitoring AI coding agent sessions and tasks. Think lazygit, but for your AI agent's task lists. Currently supports [Claude Code](https://docs.anthropic.com/en/docs/claude-code), with [Codex CLI](https://github.com/openai/codex) and [OpenCode](https://github.com/opencode-ai/opencode) planned.
 
-CLIboard reads the `.claude/` directory on your machine and presents all sessions, tasks, activity, and timeline data in an interactive TUI — no configuration needed.
+CLIboard reads agent data directories on your machine and presents all sessions, tasks, activity, and timeline data in an interactive TUI — no configuration needed.
 
 ![Task Kanban Dashboard](images/task_panel.png)
 
@@ -166,6 +166,14 @@ npm install -g .
 - **[Chokidar](https://github.com/paulmillr/chokidar)** — Filesystem watching
 - **[esbuild](https://esbuild.github.io/)** — Bundler
 - **[Vitest](https://vitest.dev/)** — Test runner
+
+## Roadmap
+
+- [ ] Support [Codex CLI](https://github.com/openai/codex) task monitoring
+- [ ] Support [OpenCode](https://github.com/opencode-ai/opencode) session tracking
+- [ ] Multi-agent CLI adapter architecture (pluggable parsers per tool)
+- [ ] Incremental refresh with filesystem watcher (replace polling)
+- [ ] Configurable refresh interval via CLI flag
 
 ## License
 
