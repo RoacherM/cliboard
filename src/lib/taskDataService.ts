@@ -12,6 +12,11 @@ interface TodoEntry {
   activeForm?: string;
 }
 
+interface SessionFileInfo {
+  fileName: string;
+  mtimeMs: number;
+}
+
 export class TaskDataService {
   private claudeDir: string;
 
@@ -23,69 +28,56 @@ export class TaskDataService {
     return path.join(this.claudeDir, TASKS_SUBDIR);
   }
 
-  async listSessions(): Promise<string[]> {
+  private async getLatestSessionFiles(): Promise<Map<string, SessionFileInfo>> {
     let entries: string[];
     try {
       entries = await fs.readdir(this.todosDir);
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return [];
+        return new Map();
       }
       throw err;
     }
 
-    const sessionIds = new Set<string>();
-    for (const name of entries) {
-      const match = TODO_FILE_RE.exec(name);
-      if (match) {
-        sessionIds.add(match[1]);
+    const matched = entries
+      .map((fileName) => {
+        const match = TODO_FILE_RE.exec(fileName);
+        if (!match) {
+          return null;
+        }
+
+        return { fileName, sessionId: match[1] };
+      })
+      .filter((entry): entry is { fileName: string; sessionId: string } => Boolean(entry));
+
+    const fileStats = await Promise.all(
+      matched.map(async (entry) => {
+        try {
+          const stat = await fs.stat(path.join(this.todosDir, entry.fileName));
+          return { ...entry, mtimeMs: stat.mtimeMs };
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    const latestBySession = new Map<string, SessionFileInfo>();
+    for (const statEntry of fileStats) {
+      if (!statEntry) continue;
+
+      const existing = latestBySession.get(statEntry.sessionId);
+      if (!existing || statEntry.mtimeMs > existing.mtimeMs) {
+        latestBySession.set(statEntry.sessionId, {
+          fileName: statEntry.fileName,
+          mtimeMs: statEntry.mtimeMs,
+        });
       }
     }
 
-    return [...sessionIds];
+    return latestBySession;
   }
 
-  async readSessionTasks(sessionId: string): Promise<Task[]> {
-    let entries: string[];
-    try {
-      entries = await fs.readdir(this.todosDir);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return [];
-      }
-      throw err;
-    }
-
-    // Find all files for this session, pick the newest by mtime
-    const sessionFiles: string[] = [];
-    for (const name of entries) {
-      const match = TODO_FILE_RE.exec(name);
-      if (match && match[1] === sessionId) {
-        sessionFiles.push(name);
-      }
-    }
-
-    if (sessionFiles.length === 0) {
-      return [];
-    }
-
-    // Pick the file with the latest mtime
-    let newestFile = sessionFiles[0];
-    let newestMtime = 0;
-    for (const name of sessionFiles) {
-      try {
-        const stat = await fs.stat(path.join(this.todosDir, name));
-        if (stat.mtimeMs > newestMtime) {
-          newestMtime = stat.mtimeMs;
-          newestFile = name;
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    const filePath = path.join(this.todosDir, newestFile);
-
+  private async readTasksFromFile(filePath: string): Promise<Task[]> {
     try {
       const content = await fs.readFile(filePath, 'utf-8');
       const parsed = JSON.parse(content);
@@ -121,6 +113,40 @@ export class TaskDataService {
     } catch {
       return [];
     }
+  }
+
+  async listSessions(): Promise<string[]> {
+    const latestBySession = await this.getLatestSessionFiles();
+    return [...latestBySession.keys()];
+  }
+
+  async readSessionTasks(sessionId: string): Promise<Task[]> {
+    const latestBySession = await this.getLatestSessionFiles();
+    const fileInfo = latestBySession.get(sessionId);
+    if (!fileInfo) {
+      return [];
+    }
+
+    return this.readTasksFromFile(path.join(this.todosDir, fileInfo.fileName));
+  }
+
+  async readSessionsTasks(sessionIds: string[]): Promise<Map<string, Task[]>> {
+    const latestBySession = await this.getLatestSessionFiles();
+    const uniqueSessionIds = [...new Set(sessionIds)];
+
+    const taskEntries = await Promise.all(
+      uniqueSessionIds.map(async (sessionId) => {
+        const fileInfo = latestBySession.get(sessionId);
+        if (!fileInfo) {
+          return [sessionId, []] as const;
+        }
+
+        const tasks = await this.readTasksFromFile(path.join(this.todosDir, fileInfo.fileName));
+        return [sessionId, tasks] as const;
+      }),
+    );
+
+    return new Map(taskEntries);
   }
 
   async readAllTasks(): Promise<Task[]> {

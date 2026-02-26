@@ -293,4 +293,36 @@ describe('TaskDataService - read operations (todos format)', () => {
       expect(tasks).toEqual([]);
     });
   });
+
+  describe('readSessionsTasks', () => {
+    it('reads tasks for multiple sessions in one call', async () => {
+      await writeTempTodoFile(tmpDir, SESSION_A, AGENT_1, [
+        { content: 'Task from A', status: 'pending' },
+      ]);
+      await writeTempTodoFile(tmpDir, SESSION_B, AGENT_2, [
+        { content: 'Task from B', status: 'in_progress' },
+      ]);
+
+      const result = await service.readSessionsTasks([SESSION_A, SESSION_B]);
+
+      expect(result.get(SESSION_A)).toHaveLength(1);
+      expect(result.get(SESSION_A)?.[0].subject).toBe('Task from A');
+      expect(result.get(SESSION_B)).toHaveLength(1);
+      expect(result.get(SESSION_B)?.[0].subject).toBe('Task from B');
+    });
+
+    it('returns empty task arrays for sessions with no matching files', async () => {
+      await writeTempTodoFile(tmpDir, SESSION_A, AGENT_1, [
+        { content: 'Task from A', status: 'pending' },
+      ]);
+
+      const result = await service.readSessionsTasks([
+        SESSION_A,
+        '00000000-0000-0000-0000-000000000000',
+      ]);
+
+      expect(result.get(SESSION_A)).toHaveLength(1);
+      expect(result.get('00000000-0000-0000-0000-000000000000')).toEqual([]);
+    });
+  });
 });

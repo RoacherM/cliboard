@@ -45,9 +45,11 @@ export function useClaudeData(claudeDir: string, options?: UseClaudeDataOptions)
       }
 
       const resolved: Session[] = [];
+      const sessionIds = sessionEntries.map(([sessionId]) => sessionId);
+      const todosTasksBySession = await taskDataService.readSessionsTasks(sessionIds);
 
       for (const [sessionId, metadata] of sessionEntries) {
-        let tasks: Task[] = await taskDataService.readSessionTasks(sessionId);
+        let tasks: Task[] = todosTasksBySession.get(sessionId) ?? [];
         // Fall back to replaying TaskCreate/TaskUpdate from jsonl when todos are empty
         if (tasks.length === 0 && metadata.jsonlPath) {
           tasks = await replayCurrentTasks(metadata.jsonlPath);
