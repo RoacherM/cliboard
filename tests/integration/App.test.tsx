@@ -2,12 +2,13 @@ import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from '../../src/App.js';
-import { createSession, createTask } from '../helpers/index.js';
+import { createSession, createTask, createMockAdapter } from '../helpers/index.js';
 
 const delay = (ms = 50) => new Promise((r) => setTimeout(r, ms));
+const mockAdapter = createMockAdapter();
 
-vi.mock('../../src/hooks/useClaudeData.js', () => ({
-  useClaudeData: vi.fn(() => ({
+vi.mock('../../src/hooks/useBackendData.js', () => ({
+  useBackendData: vi.fn(() => ({
     sessions: [
       createSession({ id: 's1', name: 'Session One' }),
       createSession({ id: 's2', name: 'Session Two' }),
@@ -21,13 +22,14 @@ vi.mock('../../src/hooks/useClaudeData.js', () => ({
     error: null,
     selectSession: vi.fn(),
     refresh: vi.fn(),
+    adapter: mockAdapter,
   })),
 }));
 
 describe('App', () => {
   it('should render session names and kanban columns', () => {
     const { lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake-claude' })
+      React.createElement(App, { adapter: mockAdapter })
     );
     const output = lastFrame()!;
 
@@ -43,7 +45,7 @@ describe('App', () => {
 
   it('should switch focus between panels when Tab is pressed', async () => {
     const { stdin, lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake-claude' })
+      React.createElement(App, { adapter: mockAdapter })
     );
 
     await delay();
@@ -60,7 +62,7 @@ describe('App', () => {
 
   it('should update kanban board when a session is selected', async () => {
     const { stdin, lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake-claude' })
+      React.createElement(App, { adapter: mockAdapter })
     );
 
     await delay();
@@ -78,7 +80,7 @@ describe('App', () => {
 
   it('should show help overlay when ? is pressed', async () => {
     const { stdin, lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake-claude' })
+      React.createElement(App, { adapter: mockAdapter })
     );
 
     await delay();

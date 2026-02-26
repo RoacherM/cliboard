@@ -8,6 +8,8 @@ import { createListCommand } from './commands/list.js';
 import { createShowCommand } from './commands/show.js';
 import { createWatchCommand } from './commands/watch.js';
 import { App } from './App.js';
+import { ClaudeBackendAdapter } from './lib/backends/claude/adapter.js';
+import { createAdapter } from './lib/backends/detect.js';
 
 function expandTilde(filePath: string): string {
   if (filePath.startsWith('~')) {
@@ -40,13 +42,16 @@ export function createProgram(claudeDir?: string): Command {
     .version('1.0.0')
     .option('--dir <path>', 'Claude config directory')
     .option('--project <path>', 'Scope to a specific project directory')
-    .action(() => {
+    .option('--backend <backend>', 'Backend: claude, opencode, auto (default: auto)')
+    .action(async () => {
       const opts = program.opts();
       const dir = resolveDir(opts, claudeDir);
       const projectPath: string | undefined = opts.project;
+      const backend: string = opts.backend ?? 'auto';
       // Only render TUI when running in a real terminal
       if (process.stdout.isTTY) {
-        render(React.createElement(App, { claudeDir: dir, projectPath }));
+        const adapter = await createAdapter(backend, dir);
+        render(React.createElement(App, { adapter, projectPath }));
       }
     });
 

@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from '../../src/App.js';
-import { createTask, createSession } from '../helpers/index.js';
+import { createTask, createSession, createMockAdapter } from '../helpers/index.js';
 
+const mockAdapter = createMockAdapter();
 let mockData: any;
-vi.mock('../../src/hooks/useClaudeData.js', () => ({
-  useClaudeData: () => mockData,
+vi.mock('../../src/hooks/useBackendData.js', () => ({
+  useBackendData: () => mockData,
 }));
 
 const delay = () => new Promise((r) => setTimeout(r, 0));
@@ -24,6 +25,7 @@ function buildMockData() {
     error: null,
     selectSession: vi.fn(),
     refresh: vi.fn(),
+    adapter: mockAdapter,
   };
 }
 
@@ -34,7 +36,7 @@ describe('E2E: Search and help overlay', () => {
 
   it('should activate search when / is pressed', async () => {
     const { stdin, lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/e2e-search' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
     await delay();
 
@@ -54,7 +56,7 @@ describe('E2E: Search and help overlay', () => {
 
   it('should show help overlay when ? is pressed and dismiss it with Escape', async () => {
     const { stdin, lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/e2e-search' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
     await delay();
 

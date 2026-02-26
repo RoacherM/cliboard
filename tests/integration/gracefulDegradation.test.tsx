@@ -2,10 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from '../../src/App.js';
+import { createMockAdapter } from '../helpers/index.js';
 
+const mockAdapter = createMockAdapter();
 let mockData: any;
-vi.mock('../../src/hooks/useClaudeData.js', () => ({
-  useClaudeData: () => mockData,
+vi.mock('../../src/hooks/useBackendData.js', () => ({
+  useBackendData: () => mockData,
 }));
 
 describe('Graceful Degradation', () => {
@@ -20,6 +22,7 @@ describe('Graceful Degradation', () => {
       error: null,
       selectSession: vi.fn(),
       refresh: vi.fn(),
+      adapter: mockAdapter,
     };
   });
 
@@ -55,7 +58,7 @@ describe('Graceful Degradation', () => {
     ];
 
     const { lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
     const output = lastFrame()!;
 
@@ -70,7 +73,7 @@ describe('Graceful Degradation', () => {
     mockData.currentTasks = [];
 
     const { lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
     const output = lastFrame()!;
 
@@ -106,7 +109,7 @@ describe('Graceful Degradation', () => {
     mockData.currentTasks = [];
 
     const { lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
     const output = lastFrame()!;
 

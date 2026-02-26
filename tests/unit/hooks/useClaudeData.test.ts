@@ -37,6 +37,9 @@ vi.mock('../../../src/lib/TaskDataService.js', () => ({
 }));
 
 vi.mock('../../../src/lib/timelineService.js', () => ({
+  TimelineService: vi.fn().mockImplementation(() => ({
+    parseSessionTimeline: vi.fn().mockResolvedValue([]),
+  })),
   replayCurrentTasks: vi.fn().mockResolvedValue([]),
 }));
 

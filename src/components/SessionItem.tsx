@@ -13,10 +13,16 @@ function truncate(str: string, max: number): string {
   return str.length > max ? str.slice(0, max - 1) + '…' : str;
 }
 
-const PULSE_CHARS = ['●', '◉', '○', '◉'];
-const PULSE_INTERVAL = 400;
+const PULSE_INTERVAL = 500;
+// Cycle: bold+color → color → dim → color → (repeat)
+const PULSE_FRAMES = [
+  { bold: true, dim: false },
+  { bold: false, dim: false },
+  { bold: false, dim: true },
+  { bold: false, dim: false },
+] as const;
 
-function PulsingDot(): React.ReactElement {
+function PulsingBadge({ char, color }: { char: string; color: string }): React.ReactElement {
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -24,22 +30,27 @@ function PulsingDot(): React.ReactElement {
     return () => clearInterval(timer);
   }, []);
 
-  // Use Date.now() so all instances stay in sync
-  const frame = Math.floor(Date.now() / PULSE_INTERVAL) % PULSE_CHARS.length;
+  const frame = Math.floor(Date.now() / PULSE_INTERVAL) % PULSE_FRAMES.length;
+  const { bold, dim } = PULSE_FRAMES[frame]!;
 
-  return <Text color="green">{PULSE_CHARS[frame]}</Text>;
+  return <Text color={color} bold={bold} dimColor={dim}>{char}</Text>;
 }
 
 export function SessionItem({ session, isSelected, maxWidth = 26 }: SessionItemProps): React.ReactElement {
   const prefix = isSelected ? '› ' : '  ';
   const counts = `${session.completed}/${session.taskCount}`;
-  const hasStaleInProgress = session.inProgress > 0 && !session.isLive;
-  const staticTag = session.isArchived ? ' ✕' : hasStaleInProgress ? ' .' : '';
+  // Badge: backend letter (C/O) or ✕ for archived, null if no backendId and not archived
+  const badge = session.backendId
+    ? (session.isArchived ? '✕' : session.backendId === 'claude' ? 'C' : 'O')
+    : (session.isArchived ? '✕' : null);
+  const badgeColor = session.backendId === 'claude' ? 'cyan'
+    : session.backendId === 'opencode' ? 'magenta' : undefined;
+  const badgePulses = !!session.backendId && session.isLive && !session.isArchived;
 
-  // Line 1: name + counts + tag
-  // Budget: maxWidth - prefix(2) - space(1) - counts(~3-5) - tag(0-2)
-  const suffix = ` ${counts}${staticTag}`;
-  const nameMax = maxWidth - prefix.length - suffix.length;
+  // Line 1 budget: prefix + name + badge(2) + " counts"
+  const badgeWidth = badge ? 2 : 0;
+  const countsStr = ` ${counts}`;
+  const nameMax = maxWidth - prefix.length - countsStr.length - badgeWidth;
   const name = truncate(session.name ?? session.id, Math.max(nameMax, 6));
 
   // Line 2: subtitle — cwd folder or git branch
@@ -53,14 +64,11 @@ export function SessionItem({ session, isSelected, maxWidth = 26 }: SessionItemP
         <Text color={isSelected ? 'cyan' : undefined}>
           {prefix}{name}
         </Text>
-        <Text dimColor> {counts}</Text>
-        {session.isLive && !session.isArchived && (
-          <Text> <PulsingDot /></Text>
+        {badge && (badgePulses
+          ? <Text> <PulsingBadge char={badge} color={badgeColor!} /></Text>
+          : <Text color={badgeColor} dimColor={session.isArchived}> {badge}</Text>
         )}
-        {hasStaleInProgress && !session.isArchived && (
-          <Text dimColor> ○</Text>
-        )}
-        {session.isArchived && <Text dimColor> ✕</Text>}
+        <Text dimColor>{countsStr}</Text>
       </Box>
       {subtitle && (
         <Box>

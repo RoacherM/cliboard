@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { SessionItem } from '../../../src/components/SessionItem.js';
@@ -26,19 +26,15 @@ describe('SessionItem', () => {
     expect(output).toContain('3/10');
   });
 
-  it('should show a pulsing indicator for live sessions', () => {
-    const session = createSession({ isLive: true });
+  it('should show a pulsing badge for live sessions', () => {
+    const session = createSession({ isLive: true, backendId: 'claude' });
     const { lastFrame } = render(
       React.createElement(SessionItem, { session })
     );
     const output = lastFrame();
 
-    // PulsingDot cycles through ●◉○◉
-    const hasPulsingIndicator =
-      output!.includes('●') ||
-      output!.includes('◉') ||
-      output!.includes('○');
-    expect(hasPulsingIndicator).toBe(true);
+    // PulsingBadge renders the backend letter (C/O) — should appear in output
+    expect(output).toContain('C');
   });
 
   it('should visually distinguish a selected session from an unselected one', () => {
@@ -57,24 +53,16 @@ describe('SessionItem', () => {
     expect(selectedOutput).not.toEqual(unselectedOutput);
   });
 
-  it('should show a dim static indicator for stale in-progress sessions (not live)', () => {
-    const staleSession = createSession({ inProgress: 2, isLive: false });
-    const liveSession = createSession({ inProgress: 2, isLive: true });
-
-    const { lastFrame: staleFrame } = render(
-      React.createElement(SessionItem, { session: staleSession })
+  it('should show static badge for non-live sessions', () => {
+    const session = createSession({ inProgress: 2, isLive: false, backendId: 'claude' });
+    const { lastFrame } = render(
+      React.createElement(SessionItem, { session })
     );
-    const { lastFrame: liveFrame } = render(
-      React.createElement(SessionItem, { session: liveSession })
-    );
+    const output = lastFrame()!;
 
-    const staleOutput = staleFrame()!;
-    const liveOutput = liveFrame()!;
-
-    // Stale session should show a dim ○ (not a pulsing dot)
-    expect(staleOutput).toContain('○');
-    // They should render differently
-    expect(staleOutput).not.toEqual(liveOutput);
+    // Static badge C should appear, no stale ○ indicator
+    expect(output).toContain('C');
+    expect(output).not.toContain('○');
   });
 
   it('should indicate when a session is archived', () => {

@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from '../../src/App.js';
-import { createTask, createSession } from '../helpers/index.js';
+import { createTask, createSession, createMockAdapter } from '../helpers/index.js';
 
+const mockAdapter = createMockAdapter();
 let mockData: any;
-vi.mock('../../src/hooks/useClaudeData.js', () => ({
-  useClaudeData: () => mockData,
+vi.mock('../../src/hooks/useBackendData.js', () => ({
+  useBackendData: () => mockData,
 }));
 
 const delay = () => new Promise((r) => setTimeout(r, 0));
@@ -26,6 +27,7 @@ function buildMockData(overrides?: { sessions?: any[]; currentTasks?: any[] }) {
     error: null,
     selectSession: vi.fn(),
     refresh: vi.fn(),
+    adapter: mockAdapter,
   };
 }
 
@@ -36,7 +38,7 @@ describe('E2E: Full journey', () => {
 
   it('should browse sessions and tasks, navigate down, and select a session', async () => {
     const { stdin, lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/e2e-test' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
     await delay();
 
@@ -77,7 +79,7 @@ describe('E2E: Full journey', () => {
 
   it('should navigate kanban columns after switching focus', async () => {
     const { stdin, lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/e2e-test' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
     await delay();
 
@@ -114,7 +116,7 @@ describe('E2E: Full journey', () => {
     });
 
     const { stdin, lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/e2e-test' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
     await delay();
 
@@ -142,7 +144,7 @@ describe('E2E: Full journey', () => {
 
   it('should isolate input between sidebar and kanban panels', async () => {
     const { stdin, lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/e2e-test' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
     await delay();
 
@@ -167,7 +169,7 @@ describe('E2E: Full journey', () => {
 
   it('should not crash when q is pressed', async () => {
     const { stdin, lastFrame } = render(
-      React.createElement(App, { claudeDir: '/tmp/e2e-test' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
     await delay();
 

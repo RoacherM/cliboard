@@ -2,10 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from '../../src/App.js';
+import { createMockAdapter } from '../helpers/index.js';
 
+const mockAdapter = createMockAdapter();
 let mockData: any;
-vi.mock('../../src/hooks/useClaudeData.js', () => ({
-  useClaudeData: () => mockData,
+vi.mock('../../src/hooks/useBackendData.js', () => ({
+  useBackendData: () => mockData,
 }));
 
 describe('E2E: Missing directory error', () => {
@@ -17,10 +19,11 @@ describe('E2E: Missing directory error', () => {
       error: 'Directory not found',
       selectSession: vi.fn(),
       refresh: vi.fn(),
+      adapter: mockAdapter,
     };
 
     const { lastFrame } = render(
-      React.createElement(App, { claudeDir: '/nonexistent/path' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
 
     const output = lastFrame()!;

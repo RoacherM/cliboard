@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from '../../src/App.js';
-import { createSession, createTask } from '../helpers/index.js';
+import { createSession, createTask, createMockAdapter } from '../helpers/index.js';
 
+const mockAdapter = createMockAdapter();
 let mockData: any;
 
-vi.mock('../../src/hooks/useClaudeData.js', () => ({
-  useClaudeData: () => mockData,
+vi.mock('../../src/hooks/useBackendData.js', () => ({
+  useBackendData: () => mockData,
 }));
 
 const baseSessions = () => [
@@ -29,6 +30,7 @@ function buildMockData(overrides?: { sessions?: any[]; currentTasks?: any[] }) {
     error: null,
     selectSession: vi.fn(),
     refresh: vi.fn(),
+    adapter: mockAdapter,
   };
 }
 
@@ -39,7 +41,7 @@ describe('Real-time updates', () => {
 
   it('should reflect task status change from pending to in_progress on rerender', () => {
     const { lastFrame, rerender } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
 
     const initial = lastFrame()!;
@@ -52,7 +54,7 @@ describe('Real-time updates', () => {
     );
     mockData = buildMockData({ currentTasks: updatedTasks });
 
-    rerender(React.createElement(App, { claudeDir: '/tmp/fake' }));
+    rerender(React.createElement(App, { adapter: mockAdapter }));
 
     const updated = lastFrame()!;
     // Task should still be visible but now in the In Progress column
@@ -63,7 +65,7 @@ describe('Real-time updates', () => {
 
   it('should display updated activeForm text on rerender', () => {
     const { lastFrame, rerender } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
 
     const initial = lastFrame()!;
@@ -75,7 +77,7 @@ describe('Real-time updates', () => {
     );
     mockData = buildMockData({ currentTasks: updatedTasks });
 
-    rerender(React.createElement(App, { claudeDir: '/tmp/fake' }));
+    rerender(React.createElement(App, { adapter: mockAdapter }));
 
     const updated = lastFrame()!;
     expect(updated).not.toContain('Starting...');
@@ -88,7 +90,7 @@ describe('Real-time updates', () => {
     mockData = buildMockData({ currentTasks: singleTask });
 
     const { lastFrame, rerender } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
 
     const initial = lastFrame()!;
@@ -102,7 +104,7 @@ describe('Real-time updates', () => {
     ];
     mockData = buildMockData({ currentTasks: twoTasks });
 
-    rerender(React.createElement(App, { claudeDir: '/tmp/fake' }));
+    rerender(React.createElement(App, { adapter: mockAdapter }));
 
     const updated = lastFrame()!;
     expect(updated).toContain('Initial task');
@@ -111,7 +113,7 @@ describe('Real-time updates', () => {
 
   it('should remove a session from the sidebar after rerender', () => {
     const { lastFrame, rerender } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
 
     const initial = lastFrame()!;
@@ -122,7 +124,7 @@ describe('Real-time updates', () => {
     const onlyAlpha = [createSession({ id: 's1', name: 'Alpha Session' })];
     mockData = buildMockData({ sessions: onlyAlpha });
 
-    rerender(React.createElement(App, { claudeDir: '/tmp/fake' }));
+    rerender(React.createElement(App, { adapter: mockAdapter }));
 
     const updated = lastFrame()!;
     expect(updated).toContain('Alpha Session');
@@ -131,7 +133,7 @@ describe('Real-time updates', () => {
 
   it('should show blocked indicator when blockedBy is added on rerender', () => {
     const { lastFrame, rerender } = render(
-      React.createElement(App, { claudeDir: '/tmp/fake' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
 
     const initial = lastFrame()!;
@@ -145,7 +147,7 @@ describe('Real-time updates', () => {
     );
     mockData = buildMockData({ currentTasks: updatedTasks });
 
-    rerender(React.createElement(App, { claudeDir: '/tmp/fake' }));
+    rerender(React.createElement(App, { adapter: mockAdapter }));
 
     const updated = lastFrame()!;
     expect(updated).toContain('⊘');

@@ -1,29 +1,26 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import path from 'node:path';
 import { Box, Text, useInput, useApp, useStdout } from 'ink';
-import { useClaudeData } from './hooks/useClaudeData.js';
+import { useBackendData } from './hooks/useBackendData.js';
 import { Sidebar } from './components/Sidebar.js';
 import { NavigableKanban } from './components/NavigableKanban.js';
 import { HelpOverlay } from './components/HelpOverlay.js';
 import { TimelineOverlay } from './components/TimelineOverlay.js';
-import { TimelineService } from './lib/timelineService.js';
 import { ActivityOverlay } from './components/ActivityOverlay.js';
-import { parseActivity } from './lib/activityService.js';
+import type { BackendAdapter } from './lib/backends/types.js';
 import type { TaskSnapshot, ActivityEntry } from './lib/types.js';
 
 interface AppProps {
-  claudeDir: string;
+  adapter: BackendAdapter;
   projectPath?: string;
 }
 
 type FocusedPanel = 'sidebar' | 'kanban';
 
-export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
-  const { sessions, currentTasks, loading, error, selectSession } = useClaudeData(claudeDir, { projectPath });
+export function App({ adapter, projectPath }: AppProps): React.ReactElement {
+  const { sessions, currentTasks, loading, error, selectSession } = useBackendData(adapter, { projectPath });
   const { exit } = useApp();
   const { stdout } = useStdout();
-  // Terminal height minus title(1) + panel borders(2) + sidebar header(2) + status bar(1) = 6 overhead
-  // Each session item is 2 lines (name + subtitle), so halve the available rows
   const sidebarVisibleHeight = Math.max(3, Math.floor(((stdout?.rows ?? 24) - 6) / 2));
 
   const [selectedSessionIndex, setSelectedSessionIndex] = useState(0);
@@ -36,7 +33,6 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
   const [showActivity, setShowActivity] = useState(false);
   const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
-  const timelineService = useMemo(() => new TimelineService(), []);
 
   // Filter sessions by active/archived status
   const filteredSessions = useMemo(() => {
@@ -87,30 +83,32 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
   }, []);
 
   const handleOpenTimeline = useCallback(async () => {
+    if (!adapter.capabilities.timeline) return;
     const session = filteredSessions[selectedSessionIndex];
-    if (!session?.jsonlPath) return;
+    if (!session) return;
     setTimelineLoading(true);
     try {
-      const snaps = await timelineService.parseSessionTimeline(session.jsonlPath);
+      const snaps = await adapter.loadTimeline(session.id);
       setTimelineSnapshots(snaps);
       setShowTimeline(true);
     } finally {
       setTimelineLoading(false);
     }
-  }, [filteredSessions, selectedSessionIndex, timelineService]);
+  }, [adapter, filteredSessions, selectedSessionIndex]);
 
   const handleOpenActivity = useCallback(async () => {
+    if (!adapter.capabilities.activity) return;
     const session = filteredSessions[selectedSessionIndex];
-    if (!session?.jsonlPath) return;
+    if (!session) return;
     setActivityLoading(true);
     try {
-      const entries = await parseActivity(session.jsonlPath);
+      const entries = await adapter.loadActivity(session.id);
       setActivityEntries(entries);
       setShowActivity(true);
     } finally {
       setActivityLoading(false);
     }
-  }, [filteredSessions, selectedSessionIndex]);
+  }, [adapter, filteredSessions, selectedSessionIndex]);
 
   useInput((input, key) => {
     if (showHelp) {
@@ -150,12 +148,12 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
       return;
     }
 
-    if (input === 't' && focusedPanel === 'sidebar' && filteredSessions.length > 0) {
+    if (input === 't' && focusedPanel === 'sidebar' && filteredSessions.length > 0 && adapter.capabilities.timeline) {
       handleOpenTimeline();
       return;
     }
 
-    if (input === 'a' && focusedPanel === 'sidebar' && filteredSessions.length > 0) {
+    if (input === 'a' && focusedPanel === 'sidebar' && filteredSessions.length > 0 && adapter.capabilities.activity) {
       handleOpenActivity();
       return;
     }
@@ -174,6 +172,15 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
   const clampedIndex = filteredSessions.length > 0 ? Math.min(selectedSessionIndex, filteredSessions.length - 1) : 0;
   const selectedSession = filteredSessions[clampedIndex];
   const projectName = useMemo(() => projectPath ? path.basename(projectPath) : null, [projectPath]);
+
+  // Build capability-aware status bar hints
+  const sidebarHints = useMemo(() => {
+    const parts = ['j/k:navigate', 'g/G:first/last', 'f:filter'];
+    if (adapter.capabilities.timeline) parts.push('t:timeline');
+    if (adapter.capabilities.activity) parts.push('a:activity');
+    parts.push('Enter:select', 'Tab:→kanban', '?:help', 'q:quit');
+    return parts.join('  ');
+  }, [adapter.capabilities]);
 
   if (showHelp) {
     return (
@@ -224,6 +231,7 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
         ) : (
           <Text dimColor>
             {filteredSessions.length} sessions
+            {adapter.displayName !== 'Claude Code' ? ` (${adapter.displayName})` : ''}
             {selectedSession ? ` │ ${selectedSession.name ?? selectedSession.id}` : ''}
             {selectedSession?.gitBranch ? ` (${selectedSession.gitBranch})` : ''}
             {totalTasks > 0 ? ` │ ${doneTasks}✓ ${activeTasks}⟳ ${pendingTasks}○` : ''}
@@ -266,7 +274,11 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
             borderColor={focusedPanel === 'kanban' ? 'cyan' : 'gray'}
             focused={focusedPanel === 'kanban'}
           >
-            <NavigableKanban tasks={currentTasks} isActive={focusedPanel === 'kanban'} />
+            {adapter.capabilities.tasks ? (
+              <NavigableKanban tasks={currentTasks} isActive={focusedPanel === 'kanban'} />
+            ) : (
+              <Text dimColor>No tasks available for this backend</Text>
+            )}
           </Panel>
         </Box>
       </Box>
@@ -276,7 +288,7 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
         <Text backgroundColor="gray" color="white">
           {' '}
           {focusedPanel === 'sidebar'
-            ? 'j/k:navigate  g/G:first/last  f:filter  t:timeline  a:activity  Enter:select  Tab:→kanban  ?:help  q:quit'
+            ? sidebarHints
             : 'h/j/k/l:navigate  Enter:open  Tab:→sessions  Esc:back  ?:help  q:quit'}
           {' '}
         </Text>

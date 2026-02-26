@@ -7,7 +7,7 @@ await build({
   target: 'node18',
   format: 'esm',
   outfile: 'dist/cli.js',
-  external: ['ink', 'react', 'chokidar', 'ink-text-input', 'commander'],
+  external: ['ink', 'react', 'chokidar', 'ink-text-input', 'commander', 'better-sqlite3'],
   banner: {
     js: '#!/usr/bin/env node',
   },

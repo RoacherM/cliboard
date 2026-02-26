@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from '../../src/App.js';
-import { createTask, createSession } from '../helpers/index.js';
+import { createTask, createSession, createMockAdapter } from '../helpers/index.js';
 
+const mockAdapter = createMockAdapter();
 let mockData: any;
-vi.mock('../../src/hooks/useClaudeData.js', () => ({
-  useClaudeData: () => mockData,
+vi.mock('../../src/hooks/useBackendData.js', () => ({
+  useBackendData: () => mockData,
 }));
 
 const delay = () => new Promise((r) => setTimeout(r, 0));
@@ -28,6 +29,7 @@ function buildMockData(overrides?: { sessions?: any[]; currentTasks?: any[] }) {
     error: null,
     selectSession: vi.fn(),
     refresh: vi.fn(),
+    adapter: mockAdapter,
   };
 }
 
@@ -38,7 +40,7 @@ describe('E2E: Real-time updates', () => {
 
   it('should display a newly added task after mock data updates and rerender', () => {
     const { lastFrame, rerender } = render(
-      React.createElement(App, { claudeDir: '/tmp/e2e-realtime' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
 
     const initial = lastFrame()!;
@@ -53,7 +55,7 @@ describe('E2E: Real-time updates', () => {
     ];
     mockData = buildMockData({ currentTasks: updatedTasks });
 
-    rerender(React.createElement(App, { claudeDir: '/tmp/e2e-realtime' }));
+    rerender(React.createElement(App, { adapter: mockAdapter }));
 
     const updated = lastFrame()!;
     // All tasks should now be visible including the new one
@@ -67,7 +69,7 @@ describe('E2E: Real-time updates', () => {
 
   it('should move a task between columns when its status changes', () => {
     const { lastFrame, rerender } = render(
-      React.createElement(App, { claudeDir: '/tmp/e2e-realtime' }),
+      React.createElement(App, { adapter: mockAdapter }),
     );
 
     const initial = lastFrame()!;
@@ -82,7 +84,7 @@ describe('E2E: Real-time updates', () => {
     );
     mockData = buildMockData({ currentTasks: updatedTasks });
 
-    rerender(React.createElement(App, { claudeDir: '/tmp/e2e-realtime' }));
+    rerender(React.createElement(App, { adapter: mockAdapter }));
 
     const updated = lastFrame()!;
     // Now: 0 pending, 1 in_progress, 1 completed

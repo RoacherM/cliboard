@@ -1,3 +1,5 @@
+import type { BackendId } from './backends/types.js';
+
 export type TaskStatus = 'pending' | 'in_progress' | 'completed';
 
 export type GraphPrefix = 'solo' | 'first' | 'middle' | 'last';
@@ -15,6 +17,8 @@ export interface Task {
   sessionId?: string;
   sessionName?: string;
   project?: string;
+  priority?: number;
+  position?: number;
 }
 
 export interface Session {
@@ -33,6 +37,10 @@ export interface Session {
   isArchived: boolean;
   isLive: boolean;
   jsonlPath: string | null;
+  backendId?: BackendId;
+  dataRef?: string;
+  model?: string;
+  tokensUsed?: number;
 }
 
 export interface SessionMetadata {

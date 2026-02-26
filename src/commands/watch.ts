@@ -5,13 +5,22 @@ export function createWatchCommand(claudeDir: string): Command {
   const cmd = new Command('watch');
 
   cmd
-    .description('Watch tasks directory for changes');
+    .description('Watch tasks directory for changes (Claude Code only)');
 
   cmd.action(async () => {
+    const backend: string = cmd.parent?.opts()?.backend ?? 'auto';
+
+    if (backend === 'opencode') {
+      console.error('Watch mode is not supported for OpenCode backend. Use the TUI instead.');
+      process.exitCode = 1;
+      return;
+    }
+
     const { default: chokidar } = await import('chokidar');
     const path = await import('node:path');
+    const dir: string = cmd.parent?.opts()?.dir ?? claudeDir;
 
-    const tasksDir = path.join(claudeDir, TASKS_SUBDIR);
+    const tasksDir = path.join(dir, TASKS_SUBDIR);
     console.log(`Watching ${tasksDir} for changes...`);
 
     const watcher = chokidar.watch(tasksDir, {
