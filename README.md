@@ -4,6 +4,10 @@ A terminal dashboard for monitoring [Claude Code](https://docs.anthropic.com/en/
 
 CLIboard reads the `.claude/` directory on your machine and presents all sessions, tasks, activity, and timeline data in an interactive TUI — no configuration needed.
 
+![Task Kanban Dashboard](images/task_panel.png)
+
+![Activity Panel](images/activity-panel.png)
+
 ## Features
 
 - **Session list** — browse all Claude Code sessions across projects, sorted by last modified
