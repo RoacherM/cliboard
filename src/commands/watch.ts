@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { TASKS_SUBDIR } from '../lib/constants.js';
 
 export function createWatchCommand(claudeDir: string): Command {
   const cmd = new Command('watch');
@@ -10,7 +11,7 @@ export function createWatchCommand(claudeDir: string): Command {
     const { default: chokidar } = await import('chokidar');
     const path = await import('node:path');
 
-    const tasksDir = path.join(claudeDir, 'tasks');
+    const tasksDir = path.join(claudeDir, TASKS_SUBDIR);
     console.log(`Watching ${tasksDir} for changes...`);
 
     const watcher = chokidar.watch(tasksDir, {

@@ -26,19 +26,19 @@ describe('SessionItem', () => {
     expect(output).toContain('3/10');
   });
 
-  it('should show an active indicator when tasks are in progress', () => {
-    const session = createSession({ inProgress: 2 });
+  it('should show a pulsing indicator for live sessions', () => {
+    const session = createSession({ isLive: true });
     const { lastFrame } = render(
       React.createElement(SessionItem, { session })
     );
     const output = lastFrame();
 
-    // Expect an active symbol such as ● or similar dot indicator
-    const hasActiveIndicator =
+    // PulsingDot cycles through ●◉○◉
+    const hasPulsingIndicator =
       output!.includes('●') ||
       output!.includes('◉') ||
-      output!.toLowerCase().includes('active');
-    expect(hasActiveIndicator).toBe(true);
+      output!.includes('○');
+    expect(hasPulsingIndicator).toBe(true);
   });
 
   it('should visually distinguish a selected session from an unselected one', () => {
@@ -55,6 +55,26 @@ describe('SessionItem', () => {
     const selectedOutput = selectedFrame();
 
     expect(selectedOutput).not.toEqual(unselectedOutput);
+  });
+
+  it('should show a dim static indicator for stale in-progress sessions (not live)', () => {
+    const staleSession = createSession({ inProgress: 2, isLive: false });
+    const liveSession = createSession({ inProgress: 2, isLive: true });
+
+    const { lastFrame: staleFrame } = render(
+      React.createElement(SessionItem, { session: staleSession })
+    );
+    const { lastFrame: liveFrame } = render(
+      React.createElement(SessionItem, { session: liveSession })
+    );
+
+    const staleOutput = staleFrame()!;
+    const liveOutput = liveFrame()!;
+
+    // Stale session should show a dim ○ (not a pulsing dot)
+    expect(staleOutput).toContain('○');
+    // They should render differently
+    expect(staleOutput).not.toEqual(liveOutput);
   });
 
   it('should indicate when a session is archived', () => {

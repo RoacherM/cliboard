@@ -5,6 +5,12 @@ import type { ActivityEntry } from '../../../src/lib/types.js';
 
 vi.mock('node:fs/promises');
 
+// Default stat mock: returns a unique mtime each call so cache never interferes between tests
+let statCallCount = 0;
+function mockStat() {
+  return { mtimeMs: ++statCallCount };
+}
+
 function makeAssistantRow(blocks: any[], timestamp: string) {
   return JSON.stringify({
     type: 'assistant',
@@ -45,6 +51,7 @@ function makeProgressRow(parentToolUseID: string | null, agentId: string, timest
 describe('parseSubAgents', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    statCallCount = 0;
   });
 
   it('returns [] for a non-existent file', async () => {
@@ -251,10 +258,12 @@ function makeErrorToolResult(toolUseId: string, content: string) {
 describe('parseActivity', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    statCallCount = 0;
+    vi.mocked(fs.stat).mockImplementation(async () => mockStat() as any);
   });
 
   it('returns [] for a non-existent file', async () => {
-    vi.mocked(fs.readFile).mockRejectedValue(new Error('ENOENT'));
+    vi.mocked(fs.stat).mockRejectedValue(new Error('ENOENT'));
     expect(await parseActivity('/tmp/missing.jsonl')).toEqual([]);
   });
 
@@ -633,6 +642,8 @@ function makeCommandRow(name: string, args: string | null, timestamp: string) {
 describe('parseActivity — slash commands', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    statCallCount = 0;
+    vi.mocked(fs.stat).mockImplementation(async () => mockStat() as any);
   });
 
   it('parses a command-message string into a command entry', async () => {
@@ -710,6 +721,175 @@ describe('parseActivity — slash commands', () => {
     const result = await parseActivity('/tmp/test.jsonl');
     expect(result).toHaveLength(1);
     expect(result[0].prompt).toBe('');
+  });
+});
+
+function makeHookProgressRow(hookEvent: string, hookName: string, command: string, timestamp: string, statusMessage?: string) {
+  return JSON.stringify({
+    type: 'progress',
+    data: {
+      type: 'hook_progress',
+      hookEvent,
+      hookName,
+      command,
+      ...(statusMessage ? { statusMessage } : {}),
+    },
+    timestamp,
+  });
+}
+
+function makeStopHookSummaryRow(timestamp: string, hookErrors: string[] = [], preventedContinuation = false) {
+  return JSON.stringify({
+    type: 'system',
+    subtype: 'stop_hook_summary',
+    hookErrors,
+    preventedContinuation,
+    timestamp,
+  });
+}
+
+describe('parseActivity — hooks', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    statCallCount = 0;
+    vi.mocked(fs.stat).mockImplementation(async () => mockStat() as any);
+  });
+
+  it('creates a hook entry for Stop hook_progress', async () => {
+    const lines = makeHookProgressRow('Stop', 'Stop', 'Review loop...', '2026-02-25T14:09:06.564Z');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: 'hook',
+      description: 'Stop',
+      prompt: 'Review loop...',
+      status: 'completed',
+      timestamp: '2026-02-25T14:09:06.564Z',
+      completedAt: '2026-02-25T14:09:06.564Z',
+    });
+  });
+
+  it('creates a hook entry for SessionStart hook_progress', async () => {
+    const lines = makeHookProgressRow('SessionStart', 'SessionStart:clear', 'clear', '2026-02-25T10:00:00Z');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: 'hook',
+      description: 'SessionStart:clear',
+      prompt: 'clear',
+      status: 'completed',
+    });
+  });
+
+  it('filters out PreToolUse hook_progress without statusMessage', async () => {
+    const lines = makeHookProgressRow('PreToolUse', 'PreToolUse:Read', 'node worker.js', '2026-02-25T10:00:00Z');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(0);
+  });
+
+  it('filters out PostToolUse hook_progress without statusMessage', async () => {
+    const lines = makeHookProgressRow('PostToolUse', 'PostToolUse:Bash', 'node validate.js', '2026-02-25T10:00:00Z');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(0);
+  });
+
+  it('includes PreToolUse hook with statusMessage', async () => {
+    const lines = makeHookProgressRow('PreToolUse', 'PreToolUse:Bash', 'validate.sh', '2026-02-25T10:00:00Z', 'Blocked: dangerous command');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: 'hook',
+      description: 'PreToolUse:Bash',
+      prompt: 'Blocked: dangerous command',
+    });
+  });
+
+  it('creates hook entry from stop_hook_summary with errors', async () => {
+    const lines = makeStopHookSummaryRow('2026-02-25T14:10:00Z', ['Hook "review" failed: exit code 1'], false);
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: 'hook',
+      description: 'Hook Error',
+      prompt: 'Hook "review" failed: exit code 1',
+      status: 'completed',
+    });
+  });
+
+  it('creates hook entry from stop_hook_summary with preventedContinuation', async () => {
+    const lines = makeStopHookSummaryRow('2026-02-25T14:10:00Z', [], true);
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: 'hook',
+      description: 'Hook Error',
+      prompt: 'Hook prevented continuation',
+    });
+  });
+
+  it('ignores stop_hook_summary without errors or preventedContinuation', async () => {
+    const lines = makeStopHookSummaryRow('2026-02-25T14:10:00Z', [], false);
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(0);
+  });
+
+  it('deduplicates Stop hooks at same timestamp (to the second)', async () => {
+    const lines = [
+      makeHookProgressRow('Stop', 'Stop', 'Review loop 1', '2026-02-25T14:09:06.100Z'),
+      makeHookProgressRow('Stop', 'Stop', 'Review loop 2', '2026-02-25T14:09:06.500Z'),
+      makeHookProgressRow('Stop', 'Stop', 'Review loop 3', '2026-02-25T14:09:06.900Z'),
+    ].join('\n');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    // All three share hookName "Stop" and same second "2026-02-25T14:09:06" → 1 entry
+    expect(result).toHaveLength(1);
+    expect(result[0].description).toBe('Stop');
+  });
+
+  it('does not dedup hooks at different seconds', async () => {
+    const lines = [
+      makeHookProgressRow('Stop', 'Stop', 'cmd1', '2026-02-25T14:09:06.100Z'),
+      makeHookProgressRow('Stop', 'Stop', 'cmd2', '2026-02-25T14:09:07.100Z'),
+    ].join('\n');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(2);
+  });
+
+  it('hooks sort correctly with other entry types by timestamp', async () => {
+    const lines = [
+      makeAssistantRow(
+        [{ type: 'tool_use', name: 'Read', id: 'toolu_r1', input: { file_path: '/src/app.ts' } }],
+        '2026-02-25T10:00:00Z',
+      ),
+      makeHookProgressRow('Stop', 'Stop', 'Review loop', '2026-02-25T09:00:00Z'),
+      makeHookProgressRow('SessionStart', 'SessionStart:clear', 'clear', '2026-02-25T08:00:00Z'),
+    ].join('\n');
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+
+    const result = await parseActivity('/tmp/test.jsonl');
+    expect(result).toHaveLength(3);
+    expect(result[0].type).toBe('hook');     // 08:00 SessionStart
+    expect(result[1].type).toBe('hook');     // 09:00 Stop
+    expect(result[2].type).toBe('tool');     // 10:00 Read
   });
 });
 

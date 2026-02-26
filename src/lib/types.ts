@@ -96,7 +96,7 @@ export interface SubAgentEntry {
 
 export interface ActivityEntry {
   id: string;                    // tool_use id
-  type: 'subagent' | 'skill' | 'tool' | 'mcp' | 'command';
+  type: 'subagent' | 'skill' | 'tool' | 'mcp' | 'command' | 'hook';
   timestamp: string | null;
   // Sub-agent fields
   agentId: string | null;

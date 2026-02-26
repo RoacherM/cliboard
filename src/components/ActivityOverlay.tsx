@@ -51,8 +51,16 @@ function entryLabelColor(entry: ActivityEntry): string {
     case 'tool': return 'yellow';
     case 'mcp': return 'green';
     case 'command': return 'blue';
+    case 'hook': return 'red';
     default: return 'cyan';
   }
+}
+
+function hookShortEvent(description: string): string {
+  if (description.startsWith('Stop')) return 'Stop';
+  if (description.startsWith('SessionStart')) return 'Start';
+  if (description === 'Hook Error') return 'Error';
+  return description.split(':')[0] || 'Hook';
 }
 
 function entryBadge(entry: ActivityEntry): string {
@@ -61,6 +69,7 @@ function entryBadge(entry: ActivityEntry): string {
     case 'tool': return `[${entry.toolName ?? 'Tool'}]`;
     case 'mcp': return `[${parseMcpFunctionName(entry.toolName ?? '')}]`;
     case 'command': return `[/${entry.description}]`;
+    case 'hook': return `[Hook:${hookShortEvent(entry.description)}]`;
     default: return `[${entry.subagentType ?? 'Agent'}]`;
   }
 }
@@ -122,6 +131,7 @@ export function ActivityOverlay({
   const tools = entries.filter((e) => e.type === 'tool');
   const mcps = entries.filter((e) => e.type === 'mcp');
   const commands = entries.filter((e) => e.type === 'command');
+  const hooks = entries.filter((e) => e.type === 'hook');
   const running = entries.filter((e) => e.status === 'running').length;
 
   if (entries.length === 0) {
@@ -155,7 +165,7 @@ export function ActivityOverlay({
     <Box flexDirection="column" padding={1}>
       {/* Header */}
       <Text bold>
-        Activity ─ {entries.length} total │ {subagents.length} agents │ {skills.length} skills │ {tools.length} tools │ {mcps.length} mcp │ {commands.length} cmds │ {running} running
+        Activity ─ {entries.length} total │ {subagents.length} agents │ {skills.length} skills │ {tools.length} tools │ {mcps.length} mcp │ {commands.length} cmds │ {hooks.length} hooks │ {running} running
       </Text>
       <Text dimColor>j/k:navigate  g/G:first/last  q/Esc:close</Text>
       <Text> </Text>
@@ -293,6 +303,25 @@ export function ActivityOverlay({
               <Text>{formatTimestamp(selected.timestamp)}</Text>
             </Text>
           </>
+        ) : selected.type === 'hook' ? (
+          <>
+            <Text>
+              <Text dimColor>Event:   </Text>
+              <Text color="red">{hookShortEvent(selected.description)}</Text>
+            </Text>
+            <Text>
+              <Text dimColor>Hook:    </Text>
+              <Text>{selected.description}</Text>
+            </Text>
+            <Text>
+              <Text dimColor>Status:  </Text>
+              <Text color="green">✓ Completed</Text>
+            </Text>
+            <Text>
+              <Text dimColor>Fired:   </Text>
+              <Text>{formatTimestamp(selected.timestamp)}</Text>
+            </Text>
+          </>
         ) : (
           <>
             <Text>
@@ -323,7 +352,7 @@ export function ActivityOverlay({
         )}
         {promptLines.length > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            <Text dimColor>{selected.type === 'skill' || selected.type === 'command' ? 'Args:' : selected.type === 'tool' || selected.type === 'mcp' ? 'Input:' : 'Prompt:'}</Text>
+            <Text dimColor>{selected.type === 'skill' || selected.type === 'command' ? 'Args:' : selected.type === 'tool' || selected.type === 'mcp' ? 'Input:' : selected.type === 'hook' ? 'Command:' : 'Prompt:'}</Text>
             {promptLines.map((line, i) => (
               <Text key={i} wrap="truncate">{line}</Text>
             ))}

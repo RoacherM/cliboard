@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises';
-import fsSync from 'node:fs';
 import path from 'node:path';
 import {
   PROJECTS_SUBDIR,
@@ -29,16 +28,20 @@ interface CacheEntry {
 
 export class MetadataService {
   private claudeDir: string;
-  private cache: CacheEntry | null = null;
+  private cache = new Map<string, CacheEntry>();
+  private lastProjectsDirMtime: number = 0;
 
   constructor(claudeDir: string) {
     this.claudeDir = claudeDir;
   }
 
-  async loadAllMetadata(): Promise<Map<string, SessionMetadata>> {
+  async loadAllMetadata(projectKey?: string): Promise<Map<string, SessionMetadata>> {
+    const cacheKey = projectKey ?? '__all__';
+
     // Return cached data if still valid
-    if (this.cache && Date.now() - this.cache.timestamp < METADATA_CACHE_TTL) {
-      return this.cache.data;
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < METADATA_CACHE_TTL) {
+      return cached.data;
     }
 
     const result = new Map<string, SessionMetadata>();
@@ -55,6 +58,7 @@ export class MetadataService {
     }
 
     for (const { fullPath: projectDir, dirName: projectDirName } of projectDirEntries) {
+      if (projectKey && projectDirName !== projectKey) continue;
       // Load sessions index for this project
       const indexEntries = await this.loadSessionsIndex(projectDir);
       const indexMap = new Map<string, SessionIndexEntry>();
@@ -97,10 +101,15 @@ export class MetadataService {
       }
     }
 
-    this.cache = {
+    this.cache.set(cacheKey, {
       data: result,
       timestamp: Date.now(),
-    };
+    });
+
+    try {
+      const stat = await fs.stat(path.join(this.claudeDir, PROJECTS_SUBDIR));
+      this.lastProjectsDirMtime = stat.mtimeMs;
+    } catch { /* ignore */ }
 
     return result;
   }
@@ -176,7 +185,22 @@ export class MetadataService {
     }
   }
 
+  async isCacheStale(): Promise<boolean> {
+    if (this.cache.size === 0) return true;
+    // If any cached entry has expired, consider stale
+    for (const entry of this.cache.values()) {
+      if (Date.now() - entry.timestamp >= METADATA_CACHE_TTL) return true;
+    }
+    try {
+      const projectsDir = path.join(this.claudeDir, PROJECTS_SUBDIR);
+      const stat = await fs.stat(projectsDir);
+      return stat.mtimeMs > this.lastProjectsDirMtime;
+    } catch {
+      return true;
+    }
+  }
+
   invalidateCache(): void {
-    this.cache = null;
+    this.cache.clear();
   }
 }

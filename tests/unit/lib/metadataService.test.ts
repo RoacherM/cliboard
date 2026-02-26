@@ -201,7 +201,7 @@ describe('MetadataService', () => {
   // ---------------------------------------------------------------------------
   describe('caching', () => {
     it('exports the expected cache TTL constant', () => {
-      expect(METADATA_CACHE_TTL).toBe(10_000);
+      expect(METADATA_CACHE_TTL).toBe(30_000);
     });
 
     it('returns cached data on second call within TTL', async () => {

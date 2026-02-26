@@ -14,6 +14,8 @@ interface TodoEntry {
 
 export class TaskDataService {
   private claudeDir: string;
+  private dirCache: { entries: string[]; timestamp: number } | null = null;
+  private static DIR_CACHE_TTL = 5_000;
 
   constructor(claudeDir: string) {
     this.claudeDir = claudeDir;
@@ -23,10 +25,20 @@ export class TaskDataService {
     return path.join(this.claudeDir, TASKS_SUBDIR);
   }
 
+  private async getDirEntries(): Promise<string[]> {
+    if (this.dirCache && Date.now() - this.dirCache.timestamp < TaskDataService.DIR_CACHE_TTL) {
+      return this.dirCache.entries;
+    }
+    const entries = await fs.readdir(this.todosDir);
+    this.dirCache = { entries, timestamp: Date.now() };
+    return entries;
+  }
+
+
   async listSessions(): Promise<string[]> {
     let entries: string[];
     try {
-      entries = await fs.readdir(this.todosDir);
+      entries = await this.getDirEntries();
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return [];
@@ -48,7 +60,7 @@ export class TaskDataService {
   async readSessionTasks(sessionId: string): Promise<Task[]> {
     let entries: string[];
     try {
-      entries = await fs.readdir(this.todosDir);
+      entries = await this.getDirEntries();
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return [];
@@ -94,8 +106,7 @@ export class TaskDataService {
         return [];
       }
 
-      const stat = await fs.stat(filePath);
-      const mtime = stat.mtime.toISOString();
+      const mtime = new Date(newestMtime).toISOString();
 
       const tasks: Task[] = [];
       for (let i = 0; i < parsed.length; i++) {

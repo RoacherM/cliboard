@@ -20,7 +20,7 @@ import path from "node:path";
 var DEFAULT_CLAUDE_DIR = path.join(os.homedir(), ".claude");
 var TASKS_SUBDIR = "todos";
 var PROJECTS_SUBDIR = "projects";
-var METADATA_CACHE_TTL = 1e4;
+var METADATA_CACHE_TTL = 3e4;
 var ARCHIVE_THRESHOLD_DAYS = 7;
 var JSONL_READ_LIMIT = 65536;
 var AUTO_REFRESH_MS = 5e3;
@@ -28,18 +28,28 @@ var SESSION_LIVENESS_MS = 5 * 6e4;
 
 // src/lib/taskDataService.ts
 var TODO_FILE_RE = /^([0-9a-f-]{36})-agent-[0-9a-f-]{36}\.json$/;
-var TaskDataService = class {
+var TaskDataService = class _TaskDataService {
   claudeDir;
+  dirCache = null;
+  static DIR_CACHE_TTL = 5e3;
   constructor(claudeDir) {
     this.claudeDir = claudeDir;
   }
   get todosDir() {
     return path2.join(this.claudeDir, TASKS_SUBDIR);
   }
+  async getDirEntries() {
+    if (this.dirCache && Date.now() - this.dirCache.timestamp < _TaskDataService.DIR_CACHE_TTL) {
+      return this.dirCache.entries;
+    }
+    const entries = await fs.readdir(this.todosDir);
+    this.dirCache = { entries, timestamp: Date.now() };
+    return entries;
+  }
   async listSessions() {
     let entries;
     try {
-      entries = await fs.readdir(this.todosDir);
+      entries = await this.getDirEntries();
     } catch (err) {
       if (err.code === "ENOENT") {
         return [];
@@ -58,7 +68,7 @@ var TaskDataService = class {
   async readSessionTasks(sessionId) {
     let entries;
     try {
-      entries = await fs.readdir(this.todosDir);
+      entries = await this.getDirEntries();
     } catch (err) {
       if (err.code === "ENOENT") {
         return [];
@@ -95,8 +105,7 @@ var TaskDataService = class {
       if (!Array.isArray(parsed)) {
         return [];
       }
-      const stat = await fs.stat(filePath);
-      const mtime = stat.mtime.toISOString();
+      const mtime = new Date(newestMtime).toISOString();
       const tasks = [];
       for (let i = 0; i < parsed.length; i++) {
         const entry = parsed[i];
@@ -247,13 +256,16 @@ function encodeProjectKey(cwd) {
 }
 var MetadataService = class {
   claudeDir;
-  cache = null;
+  cache = /* @__PURE__ */ new Map();
+  lastProjectsDirMtime = 0;
   constructor(claudeDir) {
     this.claudeDir = claudeDir;
   }
-  async loadAllMetadata() {
-    if (this.cache && Date.now() - this.cache.timestamp < METADATA_CACHE_TTL2) {
-      return this.cache.data;
+  async loadAllMetadata(projectKey) {
+    const cacheKey = projectKey ?? "__all__";
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < METADATA_CACHE_TTL2) {
+      return cached.data;
     }
     const result = /* @__PURE__ */ new Map();
     const projectsDir = path3.join(this.claudeDir, PROJECTS_SUBDIR);
@@ -265,6 +277,8 @@ var MetadataService = class {
       projectDirEntries = [];
     }
     for (const { fullPath: projectDir, dirName: projectDirName } of projectDirEntries) {
+      if (projectKey && projectDirName !== projectKey)
+        continue;
       const indexEntries = await this.loadSessionsIndex(projectDir);
       const indexMap = /* @__PURE__ */ new Map();
       for (const entry of indexEntries) {
@@ -296,10 +310,15 @@ var MetadataService = class {
         result.set(sessionId, metadata);
       }
     }
-    this.cache = {
+    this.cache.set(cacheKey, {
       data: result,
       timestamp: Date.now()
-    };
+    });
+    try {
+      const stat = await fs2.stat(path3.join(this.claudeDir, PROJECTS_SUBDIR));
+      this.lastProjectsDirMtime = stat.mtimeMs;
+    } catch {
+    }
     return result;
   }
   resolveSessionName(sessionId, metadata) {
@@ -365,8 +384,23 @@ var MetadataService = class {
       return [];
     }
   }
+  async isCacheStale() {
+    if (this.cache.size === 0)
+      return true;
+    for (const entry of this.cache.values()) {
+      if (Date.now() - entry.timestamp >= METADATA_CACHE_TTL2)
+        return true;
+    }
+    try {
+      const projectsDir = path3.join(this.claudeDir, PROJECTS_SUBDIR);
+      const stat = await fs2.stat(projectsDir);
+      return stat.mtimeMs > this.lastProjectsDirMtime;
+    } catch {
+      return true;
+    }
+  }
   invalidateCache() {
-    this.cache = null;
+    this.cache.clear();
   }
 };
 
@@ -432,7 +466,16 @@ function replayTaskEvents(entries) {
   return snapshots;
 }
 var TimelineService = class {
+  cache = /* @__PURE__ */ new Map();
   async parseSessionTimeline(jsonlPath) {
+    try {
+      const stat = await fs3.stat(jsonlPath);
+      const cached = this.cache.get(jsonlPath);
+      if (cached && cached.mtimeMs === stat.mtimeMs)
+        return cached.data;
+    } catch {
+      return [];
+    }
     let content;
     try {
       content = await fs3.readFile(jsonlPath, "utf-8");
@@ -461,11 +504,17 @@ var TimelineService = class {
       return a.timestamp.localeCompare(b.timestamp);
     });
     const deduped = dedupe(raw);
-    return deduped.map((entry) => ({
+    const snapshots = deduped.map((entry) => ({
       timestamp: entry.timestamp,
       todos: entry.todos,
       summary: computeSummary(entry.todos)
     }));
+    try {
+      const stat = await fs3.stat(jsonlPath);
+      this.cache.set(jsonlPath, { mtimeMs: stat.mtimeMs, data: snapshots });
+    } catch {
+    }
+    return snapshots;
   }
 };
 async function replayCurrentTasks(jsonlPath) {
@@ -611,11 +660,8 @@ function useClaudeData(claudeDir, options) {
   );
   const fetchSessions = useCallback(async () => {
     try {
-      const metadataMap = await metadataService.loadAllMetadata();
-      let sessionEntries = [...metadataMap.entries()];
-      if (projectKey) {
-        sessionEntries = sessionEntries.filter(([, meta]) => meta.projectDir === projectKey);
-      }
+      const metadataMap = await metadataService.loadAllMetadata(projectKey);
+      const sessionEntries = [...metadataMap.entries()];
       const resolved = [];
       for (const [sessionId, metadata] of sessionEntries) {
         let tasks = await taskDataService.readSessionTasks(sessionId);
@@ -686,9 +732,12 @@ function useClaudeData(claudeDir, options) {
   useEffect(() => {
     mountedRef.current = true;
     fetchSessions();
-    const interval = setInterval(() => {
-      metadataService.invalidateCache();
-      fetchSessions();
+    const interval = setInterval(async () => {
+      const stale = await metadataService.isCacheStale();
+      if (stale) {
+        metadataService.invalidateCache();
+        fetchSessions();
+      }
     }, AUTO_REFRESH_MS);
     return () => {
       mountedRef.current = false;
@@ -1318,7 +1367,16 @@ function extractResultText(content) {
   }
   return "";
 }
+var activityCache = /* @__PURE__ */ new Map();
 async function parseActivity(jsonlPath) {
+  try {
+    const stat = await fs5.stat(jsonlPath);
+    const cached = activityCache.get(jsonlPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs)
+      return cached.data;
+  } catch {
+    return [];
+  }
   let content;
   try {
     content = await fs5.readFile(jsonlPath, "utf-8");
@@ -1328,6 +1386,7 @@ async function parseActivity(jsonlPath) {
   const spawns = [];
   const results = /* @__PURE__ */ new Map();
   const agentIds = /* @__PURE__ */ new Map();
+  const hookDedup = /* @__PURE__ */ new Set();
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed)
@@ -1431,13 +1490,51 @@ async function parseActivity(jsonlPath) {
       if (data.type === "agent_progress" && data.parentToolUseID && data.agentId) {
         agentIds.set(data.parentToolUseID, data.agentId);
       }
+      if (data.type === "hook_progress") {
+        const event = data.hookEvent ?? "";
+        const hasMessage = !!data.statusMessage;
+        if (event === "Stop" || event === "SessionStart" || hasMessage) {
+          const ts = row.timestamp ?? "";
+          const dedupKey = `${data.hookName ?? event}_${ts.slice(0, 19)}`;
+          if (!hookDedup.has(dedupKey)) {
+            hookDedup.add(dedupKey);
+            spawns.push({
+              id: `hook_${ts || String(Date.now())}_${spawns.length}`,
+              type: "hook",
+              timestamp: row.timestamp ?? null,
+              subagentType: null,
+              description: data.hookName ?? event,
+              prompt: data.statusMessage ?? data.command ?? "",
+              skillName: null,
+              skillArgs: null,
+              toolName: null
+            });
+          }
+        }
+      }
+    }
+    if (row.type === "system" && row.subtype === "stop_hook_summary") {
+      const errors = row.hookErrors ?? [];
+      if (errors.length > 0 || row.preventedContinuation) {
+        spawns.push({
+          id: `hook_summary_${row.timestamp ?? String(Date.now())}`,
+          type: "hook",
+          timestamp: row.timestamp ?? null,
+          subagentType: null,
+          description: "Hook Error",
+          prompt: errors.join("; ") || "Hook prevented continuation",
+          skillName: null,
+          skillArgs: null,
+          toolName: null
+        });
+      }
     }
   }
   const entries = spawns.map((spawn) => {
     const result = results.get(spawn.id);
     const agentId = agentIds.get(spawn.id) ?? null;
     const isError = result?.isError ?? false;
-    if (spawn.type === "command") {
+    if (spawn.type === "command" || spawn.type === "hook") {
       return {
         id: spawn.id,
         type: spawn.type,
@@ -1487,6 +1584,11 @@ async function parseActivity(jsonlPath) {
       return 1;
     return a.timestamp.localeCompare(b.timestamp);
   });
+  try {
+    const stat = await fs5.stat(jsonlPath);
+    activityCache.set(jsonlPath, { mtimeMs: stat.mtimeMs, data: entries });
+  } catch {
+  }
   return entries;
 }
 function parseMcpPluginName(name) {
@@ -1657,9 +1759,20 @@ function entryLabelColor(entry) {
       return "green";
     case "command":
       return "blue";
+    case "hook":
+      return "red";
     default:
       return "cyan";
   }
+}
+function hookShortEvent(description) {
+  if (description.startsWith("Stop"))
+    return "Stop";
+  if (description.startsWith("SessionStart"))
+    return "Start";
+  if (description === "Hook Error")
+    return "Error";
+  return description.split(":")[0] || "Hook";
 }
 function entryBadge(entry) {
   switch (entry.type) {
@@ -1671,6 +1784,8 @@ function entryBadge(entry) {
       return `[${parseMcpFunctionName(entry.toolName ?? "")}]`;
     case "command":
       return `[/${entry.description}]`;
+    case "hook":
+      return `[Hook:${hookShortEvent(entry.description)}]`;
     default:
       return `[${entry.subagentType ?? "Agent"}]`;
   }
@@ -1729,6 +1844,7 @@ function ActivityOverlay({
   const tools = entries.filter((e) => e.type === "tool");
   const mcps = entries.filter((e) => e.type === "mcp");
   const commands = entries.filter((e) => e.type === "command");
+  const hooks = entries.filter((e) => e.type === "hook");
   const running = entries.filter((e) => e.status === "running").length;
   if (entries.length === 0) {
     return /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", padding: 1, children: [
@@ -1763,6 +1879,8 @@ function ActivityOverlay({
       " mcp \u2502 ",
       commands.length,
       " cmds \u2502 ",
+      hooks.length,
+      " hooks \u2502 ",
       running,
       " running"
     ] }),
@@ -1890,6 +2008,23 @@ function ActivityOverlay({
           /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Invoked: " }),
           /* @__PURE__ */ jsx10(Text9, { children: formatTimestamp2(selected.timestamp) })
         ] })
+      ] }) : selected.type === "hook" ? /* @__PURE__ */ jsxs8(Fragment, { children: [
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Event:   " }),
+          /* @__PURE__ */ jsx10(Text9, { color: "red", children: hookShortEvent(selected.description) })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Hook:    " }),
+          /* @__PURE__ */ jsx10(Text9, { children: selected.description })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Status:  " }),
+          /* @__PURE__ */ jsx10(Text9, { color: "green", children: "\u2713 Completed" })
+        ] }),
+        /* @__PURE__ */ jsxs8(Text9, { children: [
+          /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Fired:   " }),
+          /* @__PURE__ */ jsx10(Text9, { children: formatTimestamp2(selected.timestamp) })
+        ] })
       ] }) : /* @__PURE__ */ jsxs8(Fragment, { children: [
         /* @__PURE__ */ jsxs8(Text9, { children: [
           /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: "Plugin:  " }),
@@ -1919,7 +2054,7 @@ function ActivityOverlay({
         ] })
       ] }),
       promptLines.length > 0 && /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", marginTop: 1, children: [
-        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: selected.type === "skill" || selected.type === "command" ? "Args:" : selected.type === "tool" || selected.type === "mcp" ? "Input:" : "Prompt:" }),
+        /* @__PURE__ */ jsx10(Text9, { dimColor: true, children: selected.type === "skill" || selected.type === "command" ? "Args:" : selected.type === "tool" || selected.type === "mcp" ? "Input:" : selected.type === "hook" ? "Command:" : "Prompt:" }),
         promptLines.map((line, i) => /* @__PURE__ */ jsx10(Text9, { wrap: "truncate", children: line }, i))
       ] }),
       resultLines.length > 0 && /* @__PURE__ */ jsxs8(Box10, { flexDirection: "column", marginTop: 1, children: [
@@ -1947,6 +2082,7 @@ function App({ claudeDir, projectPath }) {
   const [showActivity, setShowActivity] = useState6(false);
   const [activityEntries, setActivityEntries] = useState6([]);
   const [activityLoading, setActivityLoading] = useState6(false);
+  const timelineService = useMemo4(() => new TimelineService(), []);
   const filteredSessions = useMemo4(() => {
     if (filter === "all")
       return sessions;
@@ -1996,14 +2132,13 @@ function App({ claudeDir, projectPath }) {
       return;
     setTimelineLoading(true);
     try {
-      const service = new TimelineService();
-      const snaps = await service.parseSessionTimeline(session.jsonlPath);
+      const snaps = await timelineService.parseSessionTimeline(session.jsonlPath);
       setTimelineSnapshots(snaps);
       setShowTimeline(true);
     } finally {
       setTimelineLoading(false);
     }
-  }, [filteredSessions, selectedSessionIndex]);
+  }, [filteredSessions, selectedSessionIndex, timelineService]);
   const handleOpenActivity = useCallback3(async () => {
     const session = filteredSessions[selectedSessionIndex];
     if (!session?.jsonlPath)

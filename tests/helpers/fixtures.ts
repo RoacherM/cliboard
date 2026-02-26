@@ -28,6 +28,7 @@ export function createSession(overrides?: Partial<Session>): Session {
     createdAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),
     isArchived: false,
+    isLive: false,
     jsonlPath: null,
     ...overrides,
   };

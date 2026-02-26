@@ -138,7 +138,7 @@ function extractResultText(content: unknown): string {
 
 interface ActivitySpawnInfo {
   id: string;
-  type: 'subagent' | 'skill' | 'tool' | 'mcp' | 'command';
+  type: 'subagent' | 'skill' | 'tool' | 'mcp' | 'command' | 'hook';
   timestamp: string | null;
   // Sub-agent
   subagentType: string | null;
@@ -151,10 +151,21 @@ interface ActivitySpawnInfo {
   toolName: string | null;
 }
 
+const activityCache = new Map<string, { mtimeMs: number; data: ActivityEntry[] }>();
+
 /**
  * Parse all activity (sub-agents + skills) from a Claude Code session jsonl file.
  */
 export async function parseActivity(jsonlPath: string): Promise<ActivityEntry[]> {
+  // Mtime-based cache: skip re-parse if file hasn't changed
+  try {
+    const stat = await fs.stat(jsonlPath);
+    const cached = activityCache.get(jsonlPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs) return cached.data;
+  } catch {
+    return [];
+  }
+
   let content: string;
   try {
     content = await fs.readFile(jsonlPath, 'utf-8');
@@ -165,6 +176,7 @@ export async function parseActivity(jsonlPath: string): Promise<ActivityEntry[]>
   const spawns: ActivitySpawnInfo[] = [];
   const results = new Map<string, { timestamp: string | null; content: string; isError: boolean }>();
   const agentIds = new Map<string, string>();
+  const hookDedup = new Set<string>();
 
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
@@ -292,6 +304,49 @@ export async function parseActivity(jsonlPath: string): Promise<ActivityEntry[]>
       ) {
         agentIds.set(data.parentToolUseID, data.agentId);
       }
+
+      // Collect hook_progress entries (lifecycle + status messages only)
+      if (data.type === 'hook_progress') {
+        const event = data.hookEvent ?? '';
+        const hasMessage = !!data.statusMessage;
+        if (event === 'Stop' || event === 'SessionStart' || hasMessage) {
+          // Dedup: truncate timestamp to seconds as key
+          const ts = row.timestamp ?? '';
+          const dedupKey = `${data.hookName ?? event}_${ts.slice(0, 19)}`;
+          if (!hookDedup.has(dedupKey)) {
+            hookDedup.add(dedupKey);
+            spawns.push({
+              id: `hook_${ts || String(Date.now())}_${spawns.length}`,
+              type: 'hook',
+              timestamp: row.timestamp ?? null,
+              subagentType: null,
+              description: data.hookName ?? event,
+              prompt: data.statusMessage ?? data.command ?? '',
+              skillName: null,
+              skillArgs: null,
+              toolName: null,
+            });
+          }
+        }
+      }
+    }
+
+    // Collect stop_hook_summary system rows for errors
+    if (row.type === 'system' && row.subtype === 'stop_hook_summary') {
+      const errors: string[] = row.hookErrors ?? [];
+      if (errors.length > 0 || row.preventedContinuation) {
+        spawns.push({
+          id: `hook_summary_${row.timestamp ?? String(Date.now())}`,
+          type: 'hook',
+          timestamp: row.timestamp ?? null,
+          subagentType: null,
+          description: 'Hook Error',
+          prompt: errors.join('; ') || 'Hook prevented continuation',
+          skillName: null,
+          skillArgs: null,
+          toolName: null,
+        });
+      }
     }
   }
 
@@ -301,8 +356,8 @@ export async function parseActivity(jsonlPath: string): Promise<ActivityEntry[]>
     const agentId = agentIds.get(spawn.id) ?? null;
     const isError = result?.isError ?? false;
 
-    // Commands are instant (no tool_result), always completed
-    if (spawn.type === 'command') {
+    // Commands and hooks are instant (no tool_result), always completed
+    if (spawn.type === 'command' || spawn.type === 'hook') {
       return {
         id: spawn.id,
         type: spawn.type,
@@ -354,6 +409,12 @@ export async function parseActivity(jsonlPath: string): Promise<ActivityEntry[]>
     if (!b.timestamp) return 1;
     return a.timestamp.localeCompare(b.timestamp);
   });
+
+  // Cache result keyed by mtime
+  try {
+    const stat = await fs.stat(jsonlPath);
+    activityCache.set(jsonlPath, { mtimeMs: stat.mtimeMs, data: entries });
+  } catch { /* skip cache */ }
 
   return entries;
 }

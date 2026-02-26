@@ -33,8 +33,8 @@ function PulsingDot(): React.ReactElement {
 export function SessionItem({ session, isSelected, maxWidth = 26 }: SessionItemProps): React.ReactElement {
   const prefix = isSelected ? '› ' : '  ';
   const counts = `${session.completed}/${session.taskCount}`;
-  const hasActive = session.inProgress > 0;
-  const staticTag = session.isArchived ? ' ✕' : hasActive ? ' .' : '';
+  const hasStaleInProgress = session.inProgress > 0 && !session.isLive;
+  const staticTag = session.isArchived ? ' ✕' : hasStaleInProgress ? ' .' : '';
 
   // Line 1: name + counts + tag
   // Budget: maxWidth - prefix(2) - space(1) - counts(~3-5) - tag(0-2)
@@ -54,8 +54,11 @@ export function SessionItem({ session, isSelected, maxWidth = 26 }: SessionItemP
           {prefix}{name}
         </Text>
         <Text dimColor> {counts}</Text>
-        {hasActive && !session.isArchived && (
+        {session.isLive && !session.isArchived && (
           <Text> <PulsingDot /></Text>
+        )}
+        {hasStaleInProgress && !session.isArchived && (
+          <Text dimColor> ○</Text>
         )}
         {session.isArchived && <Text dimColor> ✕</Text>}
       </Box>

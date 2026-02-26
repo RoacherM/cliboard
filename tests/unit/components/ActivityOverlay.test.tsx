@@ -106,6 +106,26 @@ function makeCommandEntry(overrides?: Partial<ActivityEntry>): ActivityEntry {
   };
 }
 
+function makeHookEntry(overrides?: Partial<ActivityEntry>): ActivityEntry {
+  return {
+    id: 'hook_2026-02-25T14:09:06Z_0',
+    type: 'hook',
+    agentId: null,
+    timestamp: '2026-02-25T14:09:06Z',
+    subagentType: null,
+    description: 'Stop',
+    prompt: 'Review loop: checking phase...',
+    skillName: null,
+    skillArgs: null,
+    toolName: null,
+    status: 'completed',
+    isError: false,
+    completedAt: '2026-02-25T14:09:06Z',
+    resultSummary: null,
+    ...overrides,
+  };
+}
+
 describe('ActivityOverlay', () => {
   it('renders empty state when no entries', () => {
     const { lastFrame } = render(
@@ -503,6 +523,86 @@ describe('ActivityOverlay', () => {
     expect(output).not.toContain('┬');
     expect(output).not.toContain('├');
     expect(output).not.toContain('└');
+  });
+
+  it('renders hook entry with [Hook:Stop] badge', () => {
+    const entries = [makeHookEntry({ id: 'h1', description: 'Stop' })];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('[Hook:Stop]');
+    expect(output).toContain('1 hooks');
+  });
+
+  it('renders hook entry with [Hook:Start] badge for SessionStart', () => {
+    const entries = [makeHookEntry({ id: 'h2', description: 'SessionStart:clear' })];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('[Hook:Start]');
+  });
+
+  it('renders hook error entry with [Hook:Error] badge', () => {
+    const entries = [makeHookEntry({ id: 'h3', description: 'Hook Error', prompt: 'Hook failed: exit 1' })];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('[Hook:Error]');
+  });
+
+  it('shows hook detail panel with event and command', () => {
+    const entries = [
+      makeHookEntry({
+        description: 'Stop',
+        prompt: 'Review loop: checking phase...',
+        timestamp: '2026-02-25T14:09:06Z',
+      }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('Stop');
+    expect(output).toContain('Completed');
+    expect(output).toContain('Review loop: checking phase...');
+  });
+
+  it('counts hooks in header alongside other types', () => {
+    const entries = [
+      makeEntry({ id: 'a1' }),
+      makeHookEntry({ id: 'h1' }),
+      makeHookEntry({ id: 'h2', description: 'SessionStart:clear', timestamp: '2026-02-25T10:01:00Z' }),
+    ];
+    const { lastFrame } = render(
+      React.createElement(ActivityOverlay, {
+        entries,
+        sessionName: 'Test',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+    expect(output).toContain('3 total');
+    expect(output).toContain('1 agents');
+    expect(output).toContain('2 hooks');
   });
 
   it('renders command entry with [/command-name] badge', () => {

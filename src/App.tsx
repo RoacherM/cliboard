@@ -8,8 +8,8 @@ import { HelpOverlay } from './components/HelpOverlay.js';
 import { TimelineOverlay } from './components/TimelineOverlay.js';
 import { TimelineService } from './lib/timelineService.js';
 import { ActivityOverlay } from './components/ActivityOverlay.js';
-import { parseSubAgents } from './lib/activityService.js';
-import type { TaskSnapshot, SubAgentEntry } from './lib/types.js';
+import { parseActivity } from './lib/activityService.js';
+import type { TaskSnapshot, ActivityEntry } from './lib/types.js';
 
 interface AppProps {
   claudeDir: string;
@@ -34,8 +34,16 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
   const [timelineSnapshots, setTimelineSnapshots] = useState<TaskSnapshot[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
-  const [activityEntries, setActivityEntries] = useState<SubAgentEntry[]>([]);
+  const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
+  const timelineService = useMemo(() => new TimelineService(), []);
+
+  // Filter sessions by active/archived status
+  const filteredSessions = useMemo(() => {
+    if (filter === 'all') return sessions;
+    if (filter === 'active') return sessions.filter((s) => !s.isArchived);
+    return sessions.filter((s) => s.isArchived); // 'archived'
+  }, [sessions, filter]);
 
   // Ring terminal bell when any session's task counts change
   const prevSessionsRef = useRef<typeof sessions>([]);
@@ -56,11 +64,11 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
   const handleSelectSession = useCallback(
     (index: number) => {
       setSelectedSessionIndex(index);
-      if (sessions[index]) {
-        selectSession(sessions[index].id);
+      if (filteredSessions[index]) {
+        selectSession(filteredSessions[index].id);
       }
     },
-    [sessions, selectSession],
+    [filteredSessions, selectSession],
   );
 
   const handleOpenSession = useCallback(
@@ -72,36 +80,37 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
   );
 
   const handleFilterChange = useCallback((newFilter: string) => {
-    const normalized = newFilter.toLowerCase() as 'all' | 'active' | 'archived';
-    setFilter(normalized);
+    const lower = newFilter.toLowerCase();
+    if (lower === 'all' || lower === 'active' || lower === 'archived') {
+      setFilter(lower);
+    }
   }, []);
 
   const handleOpenTimeline = useCallback(async () => {
-    const session = sessions[selectedSessionIndex];
+    const session = filteredSessions[selectedSessionIndex];
     if (!session?.jsonlPath) return;
     setTimelineLoading(true);
     try {
-      const service = new TimelineService();
-      const snaps = await service.parseSessionTimeline(session.jsonlPath);
+      const snaps = await timelineService.parseSessionTimeline(session.jsonlPath);
       setTimelineSnapshots(snaps);
       setShowTimeline(true);
     } finally {
       setTimelineLoading(false);
     }
-  }, [sessions, selectedSessionIndex]);
+  }, [filteredSessions, selectedSessionIndex, timelineService]);
 
   const handleOpenActivity = useCallback(async () => {
-    const session = sessions[selectedSessionIndex];
+    const session = filteredSessions[selectedSessionIndex];
     if (!session?.jsonlPath) return;
     setActivityLoading(true);
     try {
-      const entries = await parseSubAgents(session.jsonlPath);
+      const entries = await parseActivity(session.jsonlPath);
       setActivityEntries(entries);
       setShowActivity(true);
     } finally {
       setActivityLoading(false);
     }
-  }, [sessions, selectedSessionIndex]);
+  }, [filteredSessions, selectedSessionIndex]);
 
   useInput((input, key) => {
     if (showHelp) {
@@ -131,12 +140,22 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
       return;
     }
 
-    if (input === 't' && focusedPanel === 'sidebar' && sessions.length > 0) {
+    if (input === 'f' && focusedPanel === 'sidebar') {
+      setFilter((prev) => {
+        if (prev === 'all') return 'active';
+        if (prev === 'active') return 'archived';
+        return 'all';
+      });
+      setSelectedSessionIndex(0);
+      return;
+    }
+
+    if (input === 't' && focusedPanel === 'sidebar' && filteredSessions.length > 0) {
       handleOpenTimeline();
       return;
     }
 
-    if (input === 'a' && focusedPanel === 'sidebar' && sessions.length > 0) {
+    if (input === 'a' && focusedPanel === 'sidebar' && filteredSessions.length > 0) {
       handleOpenActivity();
       return;
     }
@@ -152,8 +171,8 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
   const doneTasks = currentTasks.filter(t => t.status === 'completed').length;
   const activeTasks = currentTasks.filter(t => t.status === 'in_progress').length;
   const pendingTasks = currentTasks.filter(t => t.status === 'pending').length;
-  const clampedIndex = sessions.length > 0 ? Math.min(selectedSessionIndex, sessions.length - 1) : 0;
-  const selectedSession = sessions[clampedIndex];
+  const clampedIndex = filteredSessions.length > 0 ? Math.min(selectedSessionIndex, filteredSessions.length - 1) : 0;
+  const selectedSession = filteredSessions[clampedIndex];
   const projectName = useMemo(() => projectPath ? path.basename(projectPath) : null, [projectPath]);
 
   if (showHelp) {
@@ -183,7 +202,7 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
   if (showActivity) {
     return (
       <Box flexDirection="column">
-        <Panel title="Sub-agents" borderColor="blue">
+        <Panel title="Activity" borderColor="blue">
           <ActivityOverlay
             entries={activityEntries}
             sessionName={selectedSession?.name ?? selectedSession?.id ?? 'Unknown'}
@@ -204,7 +223,7 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
           <Text color="yellow">⟳ {timelineLoading ? 'loading timeline...' : activityLoading ? 'loading agents...' : 'loading...'}</Text>
         ) : (
           <Text dimColor>
-            {sessions.length} sessions
+            {filteredSessions.length} sessions
             {selectedSession ? ` │ ${selectedSession.name ?? selectedSession.id}` : ''}
             {selectedSession?.gitBranch ? ` (${selectedSession.gitBranch})` : ''}
             {totalTasks > 0 ? ` │ ${doneTasks}✓ ${activeTasks}⟳ ${pendingTasks}○` : ''}
@@ -223,13 +242,13 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
         {/* Sessions panel */}
         <Box width={32}>
           <Panel
-            title={`Sessions (${sessions.length > 0 ? clampedIndex + 1 : 0}/${sessions.length})`}
+            title={`Sessions (${filteredSessions.length > 0 ? clampedIndex + 1 : 0}/${filteredSessions.length})`}
             borderColor={focusedPanel === 'sidebar' ? 'cyan' : 'gray'}
             focused={focusedPanel === 'sidebar'}
           >
             <Sidebar
-              sessions={sessions}
-              selectedIndex={selectedSessionIndex}
+              sessions={filteredSessions}
+              selectedIndex={clampedIndex}
               onSelect={handleSelectSession}
               onOpen={handleOpenSession}
               filter={filter}
@@ -257,7 +276,7 @@ export function App({ claudeDir, projectPath }: AppProps): React.ReactElement {
         <Text backgroundColor="gray" color="white">
           {' '}
           {focusedPanel === 'sidebar'
-            ? 'j/k:navigate  g/G:first/last  t:timeline  a:agents  Enter:select  Tab:→kanban  ?:help  q:quit'
+            ? 'j/k:navigate  g/G:first/last  f:filter  t:timeline  a:activity  Enter:select  Tab:→kanban  ?:help  q:quit'
             : 'h/j/k/l:navigate  Enter:open  Tab:→sessions  Esc:back  ?:help  q:quit'}
           {' '}
         </Text>

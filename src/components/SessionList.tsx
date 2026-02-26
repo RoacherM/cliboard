@@ -9,8 +9,6 @@ interface SessionListProps {
   selectedIndex: number;
   onSelect: (index: number) => void;
   onOpen: (id: string) => void;
-  filter?: string;
-  onFilterChange?: (value: string) => void;
   isActive?: boolean;
   visibleHeight?: number;
 }
@@ -20,8 +18,6 @@ export function SessionList({
   selectedIndex,
   onSelect,
   onOpen,
-  filter,
-  onFilterChange,
   isActive = true,
   visibleHeight = 20,
 }: SessionListProps): React.ReactElement {
@@ -60,7 +56,9 @@ export function SessionList({
       const next = Math.max(selectedIndex - halfPage, 0);
       onSelect(next);
     } else if (key.return) {
-      onOpen(sessions[selectedIndex].id);
+      if (sessions[selectedIndex]) {
+        onOpen(sessions[selectedIndex].id);
+      }
     }
   }, { isActive });
 

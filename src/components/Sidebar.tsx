@@ -15,7 +15,7 @@ interface SidebarProps {
   visibleHeight?: number;
 }
 
-const FILTERS = ['All', 'Active'];
+const FILTERS = ['All', 'Active', 'Archived'];
 
 export function Sidebar({
   sessions,
@@ -32,7 +32,7 @@ export function Sidebar({
       <Text bold>Sessions</Text>
       <FilterBar
         filters={FILTERS}
-        activeFilter={filter === 'all' ? 'All' : filter === 'active' ? 'Active' : 'All'}
+        activeFilter={filter === 'all' ? 'All' : filter === 'active' ? 'Active' : 'Archived'}
         onFilterChange={onFilterChange}
       />
       <SessionList

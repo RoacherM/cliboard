@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ARCHIVE_THRESHOLD_DAYS } from '../lib/constants.js';
+import fs from 'node:fs/promises';
+import { ARCHIVE_THRESHOLD_DAYS, SESSION_LIVENESS_MS } from '../lib/constants.js';
 import type { Task, Session, SessionMetadata } from '../lib/types.js';
 import type { TaskDataService } from '../lib/taskDataService.js';
 import type { MetadataService } from '../lib/metadataService.js';
@@ -57,6 +58,17 @@ export function useSessionResolver({
           inProgress === 0 &&
           Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs;
 
+        // Detect session liveness via JSONL mtime
+        let isLive = false;
+        if (metadata?.jsonlPath) {
+          try {
+            const stat = await fs.stat(metadata.jsonlPath);
+            isLive = Date.now() - stat.mtimeMs < SESSION_LIVENESS_MS;
+          } catch {
+            isLive = false;
+          }
+        }
+
         resolved.push({
           id: sessionId,
           name,
@@ -71,6 +83,8 @@ export function useSessionResolver({
           createdAt: metadata?.created ?? null,
           modifiedAt,
           isArchived,
+          isLive,
+          jsonlPath: metadata?.jsonlPath ?? null,
         });
       }
 

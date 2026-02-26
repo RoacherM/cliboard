@@ -4,11 +4,19 @@ import { TimelineService } from '../../../src/lib/timelineService.js';
 
 vi.mock('node:fs/promises');
 
+// Unique mtime per call so cache never hits between tests
+let statCallCount = 0;
+function mockStat() {
+  return { mtimeMs: ++statCallCount };
+}
+
 describe('TimelineService', () => {
   let service: TimelineService;
 
   beforeEach(() => {
     vi.resetAllMocks();
+    statCallCount = 0;
+    vi.mocked(fs.stat).mockImplementation(async () => mockStat() as any);
     service = new TimelineService();
   });
 
@@ -165,7 +173,7 @@ describe('TimelineService', () => {
   it('returns [] for a non-existent file (ENOENT)', async () => {
     const err = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
     err.code = 'ENOENT';
-    vi.mocked(fs.readFile).mockRejectedValue(err);
+    vi.mocked(fs.stat).mockRejectedValue(err);
 
     const result = await service.parseSessionTimeline('/tmp/missing.jsonl');
     expect(result).toEqual([]);

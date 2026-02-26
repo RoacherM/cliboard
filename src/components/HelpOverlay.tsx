@@ -29,10 +29,11 @@ const sections: Section[] = [
     title: 'Session List',
     shortcuts: [
       { keys: 'j/k or ↑/↓', description: 'Navigate' },
+      { keys: 'g/G', description: 'First/Last' },
       { keys: 'Enter', description: 'Select' },
-      { keys: 'f', description: 'Filter' },
+      { keys: 'f', description: 'Cycle filter (All/Active/Archived)' },
       { keys: 't', description: 'Timeline' },
-      { keys: 'a', description: 'Sub-agents' },
+      { keys: 'a', description: 'Activity' },
     ],
   },
   {
@@ -55,8 +56,6 @@ const sections: Section[] = [
     shortcuts: [
       { keys: 'q/Esc', description: 'Close' },
       { keys: 'Backspace', description: 'Back' },
-      { keys: 'n', description: 'Note' },
-      { keys: 'd', description: 'Delete' },
     ],
   },
 ];

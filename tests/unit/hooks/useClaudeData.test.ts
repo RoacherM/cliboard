@@ -43,14 +43,22 @@ vi.mock('../../../src/lib/timelineService.js', () => ({
 vi.mock('../../../src/lib/MetadataService.js', () => ({
   encodeProjectKey: vi.fn().mockImplementation((cwd: string) => cwd.replace(/\//g, '-')),
   MetadataService: vi.fn().mockImplementation(() => ({
-    loadAllMetadata: vi.fn().mockImplementation(() => {
+    loadAllMetadata: vi.fn().mockImplementation((projectKey?: string) => {
       if (shouldThrow) throw new Error('Metadata read failed');
+      if (projectKey) {
+        const filtered = new Map<string, SessionMetadata>();
+        for (const [id, meta] of mockMetadataMap) {
+          if (meta.projectDir === projectKey) filtered.set(id, meta);
+        }
+        return Promise.resolve(filtered);
+      }
       return Promise.resolve(new Map(mockMetadataMap));
     }),
     resolveSessionName: vi
       .fn()
       .mockImplementation((sessionId: string) => sessionId.substring(0, 8) + '...'),
     invalidateCache: vi.fn(),
+    isCacheStale: vi.fn().mockResolvedValue(true),
   })),
 }));
 

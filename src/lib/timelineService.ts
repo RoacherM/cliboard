@@ -93,7 +93,18 @@ function replayTaskEvents(
 }
 
 export class TimelineService {
+  private cache = new Map<string, { mtimeMs: number; data: TaskSnapshot[] }>();
+
   async parseSessionTimeline(jsonlPath: string): Promise<TaskSnapshot[]> {
+    // Mtime-based cache: skip re-parse if file hasn't changed
+    try {
+      const stat = await fs.stat(jsonlPath);
+      const cached = this.cache.get(jsonlPath);
+      if (cached && cached.mtimeMs === stat.mtimeMs) return cached.data;
+    } catch {
+      return [];
+    }
+
     let content: string;
     try {
       content = await fs.readFile(jsonlPath, 'utf-8');
@@ -121,14 +132,30 @@ export class TimelineService {
     const taskSnapshots = replayTaskEvents(entries);
     raw.push(...taskSnapshots);
 
+    // Sort by timestamp so mixed sources appear in chronological order
+    raw.sort((a, b) => {
+      if (!a.timestamp && !b.timestamp) return 0;
+      if (!a.timestamp) return -1;
+      if (!b.timestamp) return 1;
+      return a.timestamp.localeCompare(b.timestamp);
+    });
+
     // Deduplicate consecutive identical snapshots
     const deduped = dedupe(raw);
 
-    return deduped.map((entry) => ({
+    const snapshots = deduped.map((entry) => ({
       timestamp: entry.timestamp,
       todos: entry.todos,
       summary: computeSummary(entry.todos),
     }));
+
+    // Cache result keyed by mtime
+    try {
+      const stat = await fs.stat(jsonlPath);
+      this.cache.set(jsonlPath, { mtimeMs: stat.mtimeMs, data: snapshots });
+    } catch { /* skip cache */ }
+
+    return snapshots;
   }
 }
 

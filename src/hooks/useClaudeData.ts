@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import fs from 'node:fs/promises';
 import { TaskDataService } from '../lib/taskDataService.js';
 import { MetadataService, encodeProjectKey } from '../lib/metadataService.js';
 import { replayCurrentTasks } from '../lib/timelineService.js';
-import { ARCHIVE_THRESHOLD_DAYS, AUTO_REFRESH_MS } from '../lib/constants.js';
+import { ARCHIVE_THRESHOLD_DAYS, AUTO_REFRESH_MS, SESSION_LIVENESS_MS } from '../lib/constants.js';
 import type { Task, Session, SessionMetadata } from '../lib/types.js';
 
 export interface UseClaudeDataOptions {
@@ -36,13 +37,10 @@ export function useClaudeData(claudeDir: string, options?: UseClaudeDataOptions)
 
   const fetchSessions = useCallback(async () => {
     try {
-      const metadataMap: Map<string, SessionMetadata> = await metadataService.loadAllMetadata();
+      const metadataMap: Map<string, SessionMetadata> = await metadataService.loadAllMetadata(projectKey);
 
       // Source session IDs from metadata (projects/ directory), not todos/
-      let sessionEntries = [...metadataMap.entries()];
-      if (projectKey) {
-        sessionEntries = sessionEntries.filter(([, meta]) => meta.projectDir === projectKey);
-      }
+      const sessionEntries = [...metadataMap.entries()];
 
       const resolved: Session[] = [];
 
@@ -77,6 +75,18 @@ export function useClaudeData(claudeDir: string, options?: UseClaudeDataOptions)
           inProgress === 0 &&
           Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs;
 
+        // Detect session liveness via JSONL file mtime.
+        // If the JSONL was modified recently, the Claude Code process is running.
+        let isLive = false;
+        if (metadata.jsonlPath) {
+          try {
+            const stat = await fs.stat(metadata.jsonlPath);
+            isLive = Date.now() - stat.mtimeMs < SESSION_LIVENESS_MS;
+          } catch {
+            isLive = false;
+          }
+        }
+
         resolved.push({
           id: sessionId,
           name,
@@ -91,6 +101,7 @@ export function useClaudeData(claudeDir: string, options?: UseClaudeDataOptions)
           createdAt: metadata?.created ?? null,
           modifiedAt,
           isArchived,
+          isLive,
           jsonlPath: metadata?.jsonlPath ?? null,
         });
       }
@@ -120,10 +131,13 @@ export function useClaudeData(claudeDir: string, options?: UseClaudeDataOptions)
     mountedRef.current = true;
     fetchSessions();
 
-    // Auto-refresh every few seconds to pick up live changes
-    const interval = setInterval(() => {
-      metadataService.invalidateCache();
-      fetchSessions();
+    // Auto-refresh every few seconds — but only reload when projects/ dir actually changed
+    const interval = setInterval(async () => {
+      const stale = await metadataService.isCacheStale();
+      if (stale) {
+        metadataService.invalidateCache();
+        fetchSessions();
+      }
     }, AUTO_REFRESH_MS);
 
     return () => {
