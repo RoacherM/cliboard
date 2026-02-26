@@ -22,7 +22,7 @@ var init_constants = __esm({
     METADATA_CACHE_TTL = 3e4;
     ARCHIVE_THRESHOLD_DAYS = 7;
     JSONL_READ_LIMIT = 65536;
-    AUTO_REFRESH_MS = 2e3;
+    AUTO_REFRESH_MS = 200;
     SESSION_LIVENESS_MS = 5e3;
   }
 });

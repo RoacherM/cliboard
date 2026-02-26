@@ -21,7 +21,7 @@ CLIboard reads agent data directories on your machine and presents all sessions,
 - **Concurrency graph** — visual indicators showing parallel tool/agent execution
 - **Live session detection** — sessions with recent activity are marked as live
 - **Project filtering** — scope the view to a single project with `--project`
-- **Auto-refresh** — polls for changes every 2 seconds with smart mtime-based caching
+- **Auto-refresh** — polls for changes every 200ms with smart mtime-based caching
 
 ## Install
 
