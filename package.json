@@ -1,6 +1,6 @@
 {
   "name": "cliboard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Claude/Codex Kanban — TUI dashboard for tracking AI coding agent tasks across projects",
   "type": "module",
   "bin": {

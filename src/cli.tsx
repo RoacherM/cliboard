@@ -39,7 +39,7 @@ export function createProgram(claudeDir?: string): Command {
   program
     .name('cliboard')
     .description('CLIboard — terminal kanban for AI coding agent tasks')
-    .version('1.0.0')
+    .version('1.1.0')
     .option('--dir <path>', 'Claude config directory')
     .option('--project <path>', 'Scope to a specific project directory')
     .option('--backend <backend>', 'Backend: claude, opencode, auto (default: auto)')

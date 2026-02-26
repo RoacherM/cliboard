@@ -3194,7 +3194,7 @@ function resolveDir(opts, fallback) {
 }
 function createProgram(claudeDir) {
   const program = new Command4();
-  program.name("cliboard").description("CLIboard \u2014 terminal kanban for AI coding agent tasks").version("1.0.0").option("--dir <path>", "Claude config directory").option("--project <path>", "Scope to a specific project directory").option("--backend <backend>", "Backend: claude, opencode, auto (default: auto)").action(async () => {
+  program.name("cliboard").description("CLIboard \u2014 terminal kanban for AI coding agent tasks").version("1.1.0").option("--dir <path>", "Claude config directory").option("--project <path>", "Scope to a specific project directory").option("--backend <backend>", "Backend: claude, opencode, auto (default: auto)").action(async () => {
     const opts = program.opts();
     const dir = resolveDir(opts, claudeDir);
     const projectPath = opts.project;
