@@ -16,7 +16,7 @@ export class OpenCodeBackendAdapter implements BackendAdapter {
   readonly displayName = 'OpenCode';
   readonly capabilities: BackendCapabilities = {
     tasks: true,
-    timeline: false,
+    timeline: true,
     activity: true,
     liveness: true,
     gitBranch: false,
@@ -242,9 +242,64 @@ export class OpenCodeBackendAdapter implements BackendAdapter {
     return entries;
   }
 
-  async loadTimeline(_sessionId: string): Promise<TaskSnapshot[]> {
-    // Timeline not supported for OpenCode
-    return [];
+  async loadTimeline(sessionId: string): Promise<TaskSnapshot[]> {
+    const db = await this.getDb();
+
+    const rows = db
+      .prepare(
+        `SELECT id, data, time_created, time_updated
+         FROM part
+         WHERE session_id = ?
+           AND json_extract(data, '$.type') = 'tool'
+           AND lower(json_extract(data, '$.tool')) IN ('todowrite', 'todo_write')
+         ORDER BY time_created ASC`,
+      )
+      .all(sessionId) as any[];
+
+    const raw: Array<{
+      timestamp: string | null;
+      todos: Array<{ content: string; status: string; activeForm?: string }>;
+      responseStatus: 'running' | 'completed' | 'error' | 'unknown';
+      responseSummary: string | null;
+      responseAt: string | null;
+    }> = [];
+
+    for (const row of rows) {
+      let data: any;
+      try {
+        data = JSON.parse(row.data);
+      } catch {
+        continue;
+      }
+
+      const state = data.state ?? {};
+      const todos = extractTodosFromTodoWriteState(state);
+      if (!todos) continue;
+
+      const status = mapStateStatus(state.status);
+      const responseSummary = summarizeTodoWriteResult(status, state, todos);
+
+      raw.push({
+        timestamp: toIsoTime(state.time?.start) ?? toIsoTime(row.time_created),
+        todos,
+        responseStatus: status,
+        responseSummary,
+        responseAt:
+          status === 'running'
+            ? null
+            : (toIsoTime(state.time?.end) ?? toIsoTime(row.time_updated)),
+      });
+    }
+
+    const deduped = dedupeSnapshots(raw);
+    return deduped.map((entry) => ({
+      timestamp: entry.timestamp,
+      todos: entry.todos,
+      responseStatus: entry.responseStatus,
+      responseSummary: entry.responseSummary,
+      responseAt: entry.responseAt,
+      summary: computeSummary(entry.todos),
+    }));
   }
 
   async checkCacheState(): Promise<{ isStale: boolean }> {
@@ -318,6 +373,129 @@ function summarizeOpenCodeInput(tool: string, input: Record<string, any>, title:
   const val = input[key];
   const str = typeof val === 'string' ? val : JSON.stringify(val);
   return truncate(`${key}: ${str}`, 120);
+}
+
+function extractTodosFromTodoWriteState(state: any): Array<{ content: string; status: string; activeForm?: string }> | null {
+  if (Array.isArray(state?.input?.todos)) {
+    return state.input.todos.map(normalizeTodoItem);
+  }
+
+  const output = state?.output;
+  const parsed = tryParseTodosFromOutput(output);
+  if (parsed) return parsed.map(normalizeTodoItem);
+
+  return null;
+}
+
+function normalizeTodoItem(todo: any): { content: string; status: string; activeForm?: string } {
+  return {
+    content:
+      typeof todo?.content === 'string'
+        ? todo.content
+        : typeof todo?.subject === 'string'
+          ? todo.subject
+          : '',
+    status: typeof todo?.status === 'string' ? todo.status : 'pending',
+    ...(typeof todo?.activeForm === 'string' ? { activeForm: todo.activeForm } : {}),
+  };
+}
+
+function tryParseTodosFromOutput(output: any): any[] | null {
+  if (typeof output !== 'string' || output.trim() === '') return null;
+  try {
+    const parsed = JSON.parse(output);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function mapStateStatus(status: any): 'running' | 'completed' | 'error' | 'unknown' {
+  const normalized = typeof status === 'string' ? status.toLowerCase() : '';
+  if (normalized === 'error' || normalized === 'failed') return 'error';
+  if (normalized === 'completed' || normalized === 'success' || normalized === 'done') return 'completed';
+  if (normalized === 'running' || normalized === 'in_progress' || normalized === 'pending') return 'running';
+  return 'unknown';
+}
+
+function summarizeTodoWriteResult(
+  status: 'running' | 'completed' | 'error' | 'unknown',
+  state: any,
+  todos: Array<{ content: string; status: string; activeForm?: string }>,
+): string | null {
+  if (status === 'error') {
+    return truncate(state?.output ?? state?.metadata?.output ?? 'TodoWrite failed', 200);
+  }
+  if (status === 'completed' || status === 'running') {
+    return `${todos.length} todos`;
+  }
+  return null;
+}
+
+function toIsoTime(value: any): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  if (typeof value === 'string') {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && value.trim() !== '') {
+      return new Date(numeric).toISOString();
+    }
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  return null;
+}
+
+function todosFingerprint(todos: Array<{ content: string; status: string; activeForm?: string }>): string {
+  return JSON.stringify(
+    todos.map((t) => ({
+      content: t.content,
+      status: t.status,
+      activeForm: t.activeForm,
+    })),
+  );
+}
+
+function dedupeSnapshots(
+  entries: Array<{
+    timestamp: string | null;
+    todos: Array<{ content: string; status: string; activeForm?: string }>;
+    responseStatus: 'running' | 'completed' | 'error' | 'unknown';
+    responseSummary: string | null;
+    responseAt: string | null;
+  }>,
+) {
+  const result: typeof entries = [];
+  let prevFp: string | null = null;
+  for (const entry of entries) {
+    const fp = todosFingerprint(entry.todos);
+    if (fp === prevFp) continue;
+    prevFp = fp;
+    result.push(entry);
+  }
+  return result;
+}
+
+function computeSummary(todos: Array<{ content: string; status: string }>) {
+  let completed = 0;
+  let inProgress = 0;
+  let pending = 0;
+  for (const t of todos) {
+    if (t.status === 'completed') completed++;
+    else if (t.status === 'in_progress') inProgress++;
+    else pending++;
+  }
+  const total = todos.length;
+  return {
+    total,
+    completed,
+    inProgress,
+    pending,
+    progressPct: total > 0 ? Math.round((completed / total) * 100) : 0,
+  };
 }
 
 function truncate(s: unknown, max: number): string {

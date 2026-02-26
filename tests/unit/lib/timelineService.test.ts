@@ -279,4 +279,66 @@ describe('TimelineService', () => {
     expect(result[0].todos).toEqual([{ content: 'Ship fix', status: 'pending' }]);
     expect(result[1].todos).toEqual([{ content: 'Ship fix', status: 'completed' }]);
   });
+
+  // 11. Attach tool_result response status to timeline snapshots
+  it('attaches completed/running/error response states to snapshots', async () => {
+    const assistantLine = (block: any, ts: string) =>
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [block],
+        },
+        timestamp: ts,
+      });
+
+    const toolResultLine = (toolUseId: string, isError: boolean, content: string, ts: string) =>
+      JSON.stringify({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: toolUseId,
+              is_error: isError,
+              content,
+            },
+          ],
+        },
+        timestamp: ts,
+      });
+
+    const lines = [
+      assistantLine(
+        { type: 'tool_use', id: 'tu-ok', name: 'TaskCreate', input: { subject: 'Task A' } },
+        '2026-02-26T12:00:00Z',
+      ),
+      toolResultLine('tu-ok', false, 'Created successfully', '2026-02-26T12:00:01Z'),
+      assistantLine(
+        { type: 'tool_use', id: 'tu-running', name: 'TaskUpdate', input: { taskId: '1', status: 'in_progress' } },
+        '2026-02-26T12:01:00Z',
+      ),
+      assistantLine(
+        { type: 'tool_use', id: 'tu-err', name: 'TaskUpdate', input: { taskId: '1', status: 'completed' } },
+        '2026-02-26T12:02:00Z',
+      ),
+      toolResultLine('tu-err', true, 'Exit code 1', '2026-02-26T12:02:01Z'),
+    ].join('\n');
+
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+    const result = await service.parseSessionTimeline('/tmp/response-status.jsonl');
+
+    expect(result).toHaveLength(3);
+    expect(result[0].responseStatus).toBe('completed');
+    expect(result[0].responseSummary).toContain('Created successfully');
+    expect(result[0].responseAt).toBe('2026-02-26T12:00:01Z');
+
+    expect(result[1].responseStatus).toBe('running');
+    expect(result[1].responseSummary).toBeNull();
+
+    expect(result[2].responseStatus).toBe('error');
+    expect(result[2].responseSummary).toContain('Exit code 1');
+    expect(result[2].responseAt).toBe('2026-02-26T12:02:01Z');
+  });
 });

@@ -8,6 +8,8 @@ CLIboard reads agent data directories on your machine and presents all sessions,
 
 ![Activity Panel](images/activity-panel.png)
 
+![Timeline Panel](images/timeline_panel.png)
+
 ## Features
 
 - **Multi-backend support** — works with Claude Code and OpenCode out of the box; auto mode merges sessions from all detected backends into a single list
@@ -15,7 +17,7 @@ CLIboard reads agent data directories on your machine and presents all sessions,
 - **Session list** — browse all sessions across projects, sorted by last modified
 - **Kanban board** — view tasks grouped by status (pending / in-progress / completed)
 - **Activity panel** — see every tool call, sub-agent spawn, MCP invocation, slash command, and hook in a session
-- **Timeline view** — step through task snapshots to see how work progressed over time (Claude Code)
+- **Timeline view** — step through task snapshots to see how work progressed over time, including agent response status
 - **Concurrency graph** — visual indicators showing parallel tool/agent execution
 - **Live session detection** — sessions with recent activity are marked as live
 - **Project filtering** — scope the view to a single project with `--project`
@@ -80,7 +82,7 @@ Priority: `--dir` flag > `CLAUDE_DIR` env > `~/.claude`
 | Session list | Yes | Yes |
 | Task kanban | Yes | Yes |
 | Activity panel | Yes | Yes |
-| Timeline view | Yes | No |
+| Timeline view | Yes | Yes |
 | Git branch display | Yes | No |
 | Live session detection | Yes | Yes |
 | Sub-agent tracking | Yes | Yes |
@@ -104,7 +106,7 @@ Priority: `--dir` flag > `CLAUDE_DIR` env > `~/.claude`
 | `g` / `G` | Jump to first/last |
 | `Enter` | Select session |
 | `f` | Cycle filter (All / Active / Archived) |
-| `t` | Open timeline (Claude Code only) |
+| `t` | Open timeline |
 | `a` | Open activity panel |
 
 ### Kanban board
@@ -174,6 +176,7 @@ src/
 - **`session`** table — session metadata with project links
 - **`todo`** table — tasks with status, priority, and position
 - **`part`** table — tool calls and sub-agent activity as JSON blobs
+  - Timeline snapshots are reconstructed from `todowrite`/`todo_write` tool parts, with response state (`running/completed/error`)
 
 CLIboard reads these data sources (read-only) and presents them in an interactive UI built with [Ink](https://github.com/vadimdemedes/ink) (React for the terminal). The `BackendAdapter` interface abstracts the data source, so adding new backends is straightforward.
 

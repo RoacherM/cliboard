@@ -241,6 +241,72 @@ function seedDatabase() {
     JSON.stringify({ type: 'text', content: 'Let me think about this...' }),
   );
 
+  // Child session parts for timeline coverage
+  db.prepare(
+    `INSERT INTO message (id, session_id, role, time_created, time_updated, data)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run('msg-2', 'ses-3', 'assistant', now - 90 * 60_000, now - 80 * 60_000, '{}');
+
+  db.prepare(
+    `INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    'prt-7', 'msg-2', 'ses-3', now - 90 * 60_000, now - 89 * 60_000,
+    JSON.stringify({
+      type: 'tool',
+      tool: 'todowrite',
+      state: {
+        status: 'completed',
+        input: {
+          todos: [
+            { content: 'Child task', status: 'pending', activeForm: 'Working on child task' },
+          ],
+        },
+        time: { start: now - 90 * 60_000, end: now - 89 * 60_000 },
+      },
+    }),
+  );
+
+  db.prepare(
+    `INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    'prt-8', 'msg-2', 'ses-3', now - 80 * 60_000, now - 79 * 60_000,
+    JSON.stringify({
+      type: 'tool',
+      tool: 'todo_write',
+      state: {
+        status: 'error',
+        input: {
+          todos: [
+            { content: 'Child task', status: 'in_progress', activeForm: 'Executing child task' },
+          ],
+        },
+        output: 'todo write conflict',
+        time: { start: now - 80 * 60_000, end: now - 79 * 60_000 },
+      },
+    }),
+  );
+
+  db.prepare(
+    `INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    'prt-9', 'msg-2', 'ses-3', now - 70 * 60_000, now - 69 * 60_000,
+    JSON.stringify({
+      type: 'tool',
+      tool: 'todowrite',
+      state: {
+        status: 'completed',
+        output: JSON.stringify([
+          { content: 'Child task', status: 'completed', activeForm: 'Finished child task' },
+          { content: 'Review child changes', status: 'pending' },
+        ]),
+        time: { start: now - 70 * 60_000, end: now - 69 * 60_000 },
+      },
+    }),
+  );
+
   db.close();
 }
 
@@ -410,7 +476,30 @@ describe('OpenCodeBackendAdapter', () => {
   });
 
   describe('loadTimeline', () => {
-    it('should return empty array (not supported)', async () => {
+    it('should parse todowrite parts into snapshots with response status', async () => {
+      const snapshots = await adapter.loadTimeline('ses-3');
+
+      expect(snapshots).toHaveLength(3);
+
+      expect(snapshots[0].responseStatus).toBe('completed');
+      expect(snapshots[0].summary.total).toBe(1);
+      expect(snapshots[0].summary.pending).toBe(1);
+      expect(snapshots[0].summary.completed).toBe(0);
+      expect(snapshots[0].responseSummary).toBe('1 todos');
+      expect(snapshots[0].todos[0].content).toBe('Child task');
+
+      expect(snapshots[1].responseStatus).toBe('error');
+      expect(snapshots[1].responseSummary).toContain('todo write conflict');
+      expect(snapshots[1].summary.inProgress).toBe(1);
+
+      expect(snapshots[2].responseStatus).toBe('completed');
+      expect(snapshots[2].summary.total).toBe(2);
+      expect(snapshots[2].summary.completed).toBe(1);
+      expect(snapshots[2].summary.pending).toBe(1);
+      expect(snapshots[2].todos[1].content).toBe('Review child changes');
+    });
+
+    it('should return empty array when session has no todowrite parts', async () => {
       const snapshots = await adapter.loadTimeline('ses-1');
       expect(snapshots).toHaveLength(0);
     });
@@ -419,7 +508,7 @@ describe('OpenCodeBackendAdapter', () => {
   describe('capabilities', () => {
     it('should report correct capabilities', () => {
       expect(adapter.capabilities.tasks).toBe(true);
-      expect(adapter.capabilities.timeline).toBe(false);
+      expect(adapter.capabilities.timeline).toBe(true);
       expect(adapter.capabilities.activity).toBe(true);
       expect(adapter.capabilities.gitBranch).toBe(false);
     });

@@ -20,6 +20,27 @@ const STATUS_COLOR: Record<string, string> = {
   pending: 'gray',
 };
 
+const RESPONSE_ICON: Record<string, string> = {
+  completed: '✓',
+  running: '⟳',
+  error: '✗',
+  unknown: '?',
+};
+
+const RESPONSE_COLOR: Record<string, string> = {
+  completed: 'green',
+  running: 'yellow',
+  error: 'red',
+  unknown: 'gray',
+};
+
+const RESPONSE_LABEL: Record<string, string> = {
+  completed: 'Completed',
+  running: 'Running',
+  error: 'Error',
+  unknown: 'Unknown',
+};
+
 function formatTimestamp(iso: string | null): string {
   if (!iso) return 'unknown';
   const d = new Date(iso);
@@ -31,6 +52,10 @@ function progressBar(pct: number, width = 12): string {
   const clamped = Math.max(0, Math.min(100, pct));
   const filled = Math.round((clamped / 100) * width);
   return `[${'#'.repeat(filled)}${'.'.repeat(width - filled)}]`;
+}
+
+function truncate(str: string, max: number): string {
+  return str.length > max ? `${str.slice(0, max - 1)}…` : str;
 }
 
 const VISIBLE_SNAPSHOTS = 16;
@@ -108,9 +133,10 @@ export function TimelineOverlay({
             const isSel = realIndex === selectedIndex;
             const ts = formatTimestamp(snap.timestamp);
             const s = snap.summary;
+            const responseStatus = snap.responseStatus ?? 'unknown';
             return (
               <Text key={realIndex} color={isSel ? 'cyan' : undefined} bold={isSel}>
-                {isSel ? '›' : ' '} {ts}  {s.completed}/{s.total} {s.progressPct}%
+                {isSel ? '›' : ' '} {RESPONSE_ICON[responseStatus] ?? '?'} {ts}  {s.completed}/{s.total} {s.progressPct}%
               </Text>
             );
           })}
@@ -127,6 +153,16 @@ export function TimelineOverlay({
           <Text dimColor>
             {selected.summary.completed}✓ {selected.summary.inProgress}⟳ {selected.summary.pending}○ ({selected.summary.progressPct}%) {progressBar(selected.summary.progressPct)}
           </Text>
+          <Text>
+            Response:{' '}
+            <Text color={RESPONSE_COLOR[selected.responseStatus ?? 'unknown'] ?? 'gray'}>
+              {RESPONSE_ICON[selected.responseStatus ?? 'unknown'] ?? '?'} {RESPONSE_LABEL[selected.responseStatus ?? 'unknown'] ?? 'Unknown'}
+            </Text>
+            {selected.responseAt ? ` @ ${formatTimestamp(selected.responseAt)}` : ''}
+          </Text>
+          {selected.responseSummary && (
+            <Text dimColor>{truncate(selected.responseSummary.replace(/\s+/g, ' ').trim(), 120)}</Text>
+          )}
           <Text> </Text>
           {selected.todos.map((todo, i) => (
             <Text key={i} color={STATUS_COLOR[todo.status] ?? undefined}>

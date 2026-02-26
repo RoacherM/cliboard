@@ -146,4 +146,28 @@ describe('TimelineOverlay', () => {
 
     expect(output).toContain('My cool project');
   });
+
+  it('should render response status and summary', () => {
+    const snapshots = [
+      makeSnapshot({
+        responseStatus: 'error',
+        responseAt: '2026-02-25T10:00:30Z',
+        responseSummary: 'Exit code 1: write failed',
+      }),
+    ];
+
+    const { lastFrame } = render(
+      React.createElement(TimelineOverlay, {
+        snapshots,
+        sessionName: 'Test session',
+        onClose: vi.fn(),
+      }),
+    );
+    const output = lastFrame()!;
+
+    expect(output).toContain('Response:');
+    expect(output).toContain('Error');
+    expect(output).toContain('2026-02-25 10:00');
+    expect(output).toContain('Exit code 1: write failed');
+  });
 });

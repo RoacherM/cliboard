@@ -126,6 +126,9 @@ export interface ActivityEntry {
 export interface TaskSnapshot {
   timestamp: string | null;
   todos: Array<{ content: string; status: string; activeForm?: string }>;
+  responseStatus?: 'running' | 'completed' | 'error' | 'unknown';
+  responseSummary?: string | null;
+  responseAt?: string | null;
   summary: {
     total: number;
     completed: number;

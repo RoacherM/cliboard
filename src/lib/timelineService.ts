@@ -2,18 +2,32 @@ import fs from 'node:fs/promises';
 import type { Task, TaskSnapshot } from './types.js';
 
 type TodoItem = { content: string; status: string; activeForm?: string };
+type ResponseStatus = 'running' | 'completed' | 'error' | 'unknown';
+
+interface ToolResultInfo {
+  timestamp: string | null;
+  isError: boolean;
+  summary: string;
+}
 
 interface RawSnapshot {
   timestamp: string | null;
   todos: TodoItem[];
+  responseStatus: ResponseStatus;
+  responseSummary: string | null;
+  responseAt: string | null;
 }
 
 /**
  * Parse jsonl rows into an array of assistant tool_use blocks with timestamps.
  * Shared by both timeline and task-replay logic.
  */
-function parseJsonlRows(content: string): Array<{ row: any; block: any; timestamp: string | null }> {
-  const results: Array<{ row: any; block: any; timestamp: string | null }> = [];
+function parseJsonlRows(content: string): {
+  entries: Array<{ row: any; block: any; timestamp: string | null }>;
+  toolResults: Map<string, ToolResultInfo>;
+} {
+  const entries: Array<{ row: any; block: any; timestamp: string | null }> = [];
+  const toolResults = new Map<string, ToolResultInfo>();
 
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
@@ -40,7 +54,7 @@ function parseJsonlRows(content: string): Array<{ row: any; block: any; timestam
     for (const blocks of contentBlocks) {
       for (const block of blocks) {
         if (block?.type === 'tool_use') {
-          results.push({ row, block, timestamp: row.timestamp ?? null });
+          entries.push({ row, block, timestamp: row.timestamp ?? null });
         }
       }
     }
@@ -51,15 +65,28 @@ function parseJsonlRows(content: string): Array<{ row: any; block: any; timestam
       Array.isArray(row.toolUseResult.newTodos) &&
       row.toolUseResult.newTodos.length > 0
     ) {
-      results.push({
+      entries.push({
         row,
         block: { name: '__toolUseResult__', input: { todos: row.toolUseResult.newTodos } },
         timestamp: row.timestamp ?? null,
       });
     }
+
+    // Capture tool_result rows to infer response status for each tool_use id
+    if (row.type === 'user' && Array.isArray(row.message?.content)) {
+      for (const block of row.message.content) {
+        if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+          toolResults.set(block.tool_use_id, {
+            timestamp: row.timestamp ?? null,
+            isError: block.is_error === true,
+            summary: extractToolResultText(block.content),
+          });
+        }
+      }
+    }
   }
 
-  return results;
+  return { entries, toolResults };
 }
 
 /**
@@ -68,6 +95,7 @@ function parseJsonlRows(content: string): Array<{ row: any; block: any; timestam
  */
 function replayTaskEvents(
   entries: Array<{ block: any; timestamp: string | null }>,
+  toolResults: Map<string, ToolResultInfo>,
 ): RawSnapshot[] {
   const taskMap = new Map<string, TodoItem>();
   let nextId = 1;
@@ -84,14 +112,22 @@ function replayTaskEvents(
         status: 'pending',
         ...(input.activeForm ? { activeForm: input.activeForm } : {}),
       });
-      snapshots.push({ timestamp, todos: [...taskMap.values()].map(cloneTodo) });
+      snapshots.push({
+        timestamp,
+        todos: [...taskMap.values()].map(cloneTodo),
+        ...resolveResponseMeta(block, toolResults),
+      });
     } else if (name === 'TaskUpdate' && input.taskId) {
       const existing = taskMap.get(input.taskId);
       if (existing) {
         if (input.status) existing.status = input.status;
         if (input.subject) existing.content = input.subject;
         if (input.activeForm) existing.activeForm = input.activeForm;
-        snapshots.push({ timestamp, todos: [...taskMap.values()].map(cloneTodo) });
+        snapshots.push({
+          timestamp,
+          todos: [...taskMap.values()].map(cloneTodo),
+          ...resolveResponseMeta(block, toolResults),
+        });
       }
     }
   }
@@ -119,7 +155,9 @@ export class TimelineService {
       return [];
     }
 
-    const entries = parseJsonlRows(content);
+    const parsed = parseJsonlRows(content);
+    const entries = parsed.entries;
+    const toolResults = parsed.toolResults;
     const raw: RawSnapshot[] = [];
 
     // Collect TodoWrite / toolUseResult snapshots (legacy full-snapshot format)
@@ -131,12 +169,13 @@ export class TimelineService {
         raw.push({
           timestamp,
           todos: block.input.todos.map(normalizeTodo),
+          ...resolveResponseMeta(block, toolResults),
         });
       }
     }
 
     // Collect TaskCreate/TaskUpdate snapshots (incremental format)
-    const taskSnapshots = replayTaskEvents(entries);
+    const taskSnapshots = replayTaskEvents(entries, toolResults);
     raw.push(...taskSnapshots);
 
     // Sort by timestamp so mixed sources appear in chronological order
@@ -153,6 +192,9 @@ export class TimelineService {
     const snapshots = deduped.map((entry) => ({
       timestamp: entry.timestamp,
       todos: entry.todos,
+      responseStatus: entry.responseStatus,
+      responseSummary: entry.responseSummary,
+      responseAt: entry.responseAt,
       summary: computeSummary(entry.todos),
     }));
 
@@ -178,7 +220,7 @@ export async function replayCurrentTasks(jsonlPath: string): Promise<Task[]> {
     return [];
   }
 
-  const entries = parseJsonlRows(content);
+  const entries = parseJsonlRows(content).entries;
   const taskMap = new Map<string, Task>();
   let nextId = 1;
 
@@ -271,6 +313,61 @@ function cloneTodo(todo: TodoItem): TodoItem {
   return {
     content: todo.content,
     status: todo.status,
+  };
+}
+
+function extractToolResultText(content: any): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const text = content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part.text === 'string') return part.text;
+        return '';
+      })
+      .join('\n')
+      .trim();
+    return text.slice(0, 200);
+  }
+  if (content && typeof content === 'object' && typeof content.text === 'string') {
+    return content.text.slice(0, 200);
+  }
+  return '';
+}
+
+function resolveResponseMeta(
+  block: any,
+  toolResults: Map<string, ToolResultInfo>,
+): { responseStatus: ResponseStatus; responseSummary: string | null; responseAt: string | null } {
+  if (block?.name === '__toolUseResult__') {
+    return {
+      responseStatus: 'completed',
+      responseSummary: null,
+      responseAt: null,
+    };
+  }
+
+  if (typeof block?.id !== 'string') {
+    return {
+      responseStatus: 'unknown',
+      responseSummary: null,
+      responseAt: null,
+    };
+  }
+
+  const result = toolResults.get(block.id);
+  if (!result) {
+    return {
+      responseStatus: 'running',
+      responseSummary: null,
+      responseAt: null,
+    };
+  }
+
+  return {
+    responseStatus: result.isError ? 'error' : 'completed',
+    responseSummary: result.summary || null,
+    responseAt: result.timestamp,
   };
 }
 
