@@ -9,5 +9,5 @@ export const ARCHIVE_THRESHOLD_DAYS = 7;
 export const WATCHER_DEBOUNCE_MS = 200;
 export const SEARCH_DEBOUNCE_MS = 150;
 export const JSONL_READ_LIMIT = 65_536; // 64KB
-export const AUTO_REFRESH_MS = 5_000; // 5 seconds
+export const AUTO_REFRESH_MS = 2_000; // 2 seconds — mtime cache makes this cheap
 export const SESSION_LIVENESS_MS = 5 * 60_000; // 5 minutes — if JSONL was modified within this window, the session is live

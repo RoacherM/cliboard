@@ -23,7 +23,7 @@ var PROJECTS_SUBDIR = "projects";
 var METADATA_CACHE_TTL = 3e4;
 var ARCHIVE_THRESHOLD_DAYS = 7;
 var JSONL_READ_LIMIT = 65536;
-var AUTO_REFRESH_MS = 5e3;
+var AUTO_REFRESH_MS = 2e3;
 var SESSION_LIVENESS_MS = 5 * 6e4;
 
 // src/lib/taskDataService.ts
