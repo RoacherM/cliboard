@@ -17,10 +17,10 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
-export async function detectAvailableBackends(): Promise<BackendId[]> {
+export async function detectAvailableBackends(claudeDir?: string): Promise<BackendId[]> {
   const available: BackendId[] = [];
 
-  if (await pathExists(CLAUDE_DIR_PATH)) {
+  if (await pathExists(claudeDir ?? CLAUDE_DIR_PATH)) {
     available.push('claude');
   }
   if (await pathExists(OPENCODE_DB_PATH)) {
@@ -46,7 +46,7 @@ export async function createAdapter(
   claudeDir: string,
 ): Promise<BackendAdapter> {
   if (backend === 'auto') {
-    const available = await detectAvailableBackends();
+    const available = await detectAvailableBackends(claudeDir);
 
     if (available.length > 1) {
       const adapters = await Promise.all(

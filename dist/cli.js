@@ -76,6 +76,110 @@ function summarizeOpenCodeInput(tool, input, title) {
   const str = typeof val === "string" ? val : JSON.stringify(val);
   return truncate(`${key}: ${str}`, 120);
 }
+function extractTodosFromTodoWriteState(state) {
+  if (Array.isArray(state?.input?.todos)) {
+    return state.input.todos.map(normalizeTodoItem);
+  }
+  const output = state?.output;
+  const parsed = tryParseTodosFromOutput(output);
+  if (parsed)
+    return parsed.map(normalizeTodoItem);
+  return null;
+}
+function normalizeTodoItem(todo) {
+  return {
+    content: typeof todo?.content === "string" ? todo.content : typeof todo?.subject === "string" ? todo.subject : "",
+    status: typeof todo?.status === "string" ? todo.status : "pending",
+    ...typeof todo?.activeForm === "string" ? { activeForm: todo.activeForm } : {}
+  };
+}
+function tryParseTodosFromOutput(output) {
+  if (typeof output !== "string" || output.trim() === "")
+    return null;
+  try {
+    const parsed = JSON.parse(output);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function mapStateStatus(status) {
+  const normalized = typeof status === "string" ? status.toLowerCase() : "";
+  if (normalized === "error" || normalized === "failed")
+    return "error";
+  if (normalized === "completed" || normalized === "success" || normalized === "done")
+    return "completed";
+  if (normalized === "running" || normalized === "in_progress" || normalized === "pending")
+    return "running";
+  return "unknown";
+}
+function summarizeTodoWriteResult(status, state, todos) {
+  if (status === "error") {
+    return truncate(state?.output ?? state?.metadata?.output ?? "TodoWrite failed", 200);
+  }
+  if (status === "completed" || status === "running") {
+    return `${todos.length} todos`;
+  }
+  return null;
+}
+function toIsoTime(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  if (typeof value === "string") {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && value.trim() !== "") {
+      return new Date(numeric).toISOString();
+    }
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
+  return null;
+}
+function todosFingerprint2(todos) {
+  return JSON.stringify(
+    todos.map((t) => ({
+      content: t.content,
+      status: t.status,
+      activeForm: t.activeForm
+    }))
+  );
+}
+function dedupeSnapshots(entries) {
+  const result = [];
+  let prevFp = null;
+  for (const entry of entries) {
+    const fp = todosFingerprint2(entry.todos);
+    if (fp === prevFp)
+      continue;
+    prevFp = fp;
+    result.push(entry);
+  }
+  return result;
+}
+function computeSummary2(todos) {
+  let completed = 0;
+  let inProgress = 0;
+  let pending = 0;
+  for (const t of todos) {
+    if (t.status === "completed")
+      completed++;
+    else if (t.status === "in_progress")
+      inProgress++;
+    else
+      pending++;
+  }
+  const total = todos.length;
+  return {
+    total,
+    completed,
+    inProgress,
+    pending,
+    progressPct: total > 0 ? Math.round(completed / total * 100) : 0
+  };
+}
 function truncate(s, max) {
   const str = typeof s === "string" ? s : s == null ? "" : JSON.stringify(s);
   if (str.length <= max)
@@ -94,7 +198,7 @@ var init_adapter = __esm({
       displayName = "OpenCode";
       capabilities = {
         tasks: true,
-        timeline: false,
+        timeline: true,
         activity: true,
         liveness: true,
         gitBranch: false,
@@ -276,8 +380,47 @@ var init_adapter = __esm({
         }
         return entries;
       }
-      async loadTimeline(_sessionId) {
-        return [];
+      async loadTimeline(sessionId) {
+        const db = await this.getDb();
+        const rows = db.prepare(
+          `SELECT id, data, time_created, time_updated
+         FROM part
+         WHERE session_id = ?
+           AND json_extract(data, '$.type') = 'tool'
+           AND lower(json_extract(data, '$.tool')) IN ('todowrite', 'todo_write')
+         ORDER BY time_created ASC`
+        ).all(sessionId);
+        const raw = [];
+        for (const row of rows) {
+          let data;
+          try {
+            data = JSON.parse(row.data);
+          } catch {
+            continue;
+          }
+          const state = data.state ?? {};
+          const todos = extractTodosFromTodoWriteState(state);
+          if (!todos)
+            continue;
+          const status = mapStateStatus(state.status);
+          const responseSummary = summarizeTodoWriteResult(status, state, todos);
+          raw.push({
+            timestamp: toIsoTime(state.time?.start) ?? toIsoTime(row.time_created),
+            todos,
+            responseStatus: status,
+            responseSummary,
+            responseAt: status === "running" ? null : toIsoTime(state.time?.end) ?? toIsoTime(row.time_updated)
+          });
+        }
+        const deduped = dedupeSnapshots(raw);
+        return deduped.map((entry) => ({
+          timestamp: entry.timestamp,
+          todos: entry.todos,
+          responseStatus: entry.responseStatus,
+          responseSummary: entry.responseSummary,
+          responseAt: entry.responseAt,
+          summary: computeSummary2(entry.todos)
+        }));
       }
       async checkCacheState() {
         try {
@@ -979,7 +1122,8 @@ function finalizeGroup(prefixes, start, end) {
 // src/lib/timelineService.ts
 import fs4 from "node:fs/promises";
 function parseJsonlRows(content) {
-  const results = [];
+  const entries = [];
+  const toolResults = /* @__PURE__ */ new Map();
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed)
@@ -1003,21 +1147,32 @@ function parseJsonlRows(content) {
     for (const blocks of contentBlocks) {
       for (const block of blocks) {
         if (block?.type === "tool_use") {
-          results.push({ row, block, timestamp: row.timestamp ?? null });
+          entries.push({ row, block, timestamp: row.timestamp ?? null });
         }
       }
     }
     if (row.toolUseResult && Array.isArray(row.toolUseResult.newTodos) && row.toolUseResult.newTodos.length > 0) {
-      results.push({
+      entries.push({
         row,
         block: { name: "__toolUseResult__", input: { todos: row.toolUseResult.newTodos } },
         timestamp: row.timestamp ?? null
       });
     }
+    if (row.type === "user" && Array.isArray(row.message?.content)) {
+      for (const block of row.message.content) {
+        if (block?.type === "tool_result" && typeof block.tool_use_id === "string") {
+          toolResults.set(block.tool_use_id, {
+            timestamp: row.timestamp ?? null,
+            isError: block.is_error === true,
+            summary: extractToolResultText(block.content)
+          });
+        }
+      }
+    }
   }
-  return results;
+  return { entries, toolResults };
 }
-function replayTaskEvents(entries) {
+function replayTaskEvents(entries, toolResults) {
   const taskMap = /* @__PURE__ */ new Map();
   let nextId = 1;
   const snapshots = [];
@@ -1031,7 +1186,11 @@ function replayTaskEvents(entries) {
         status: "pending",
         ...input.activeForm ? { activeForm: input.activeForm } : {}
       });
-      snapshots.push({ timestamp, todos: [...taskMap.values()].map(cloneTodo) });
+      snapshots.push({
+        timestamp,
+        todos: [...taskMap.values()].map(cloneTodo),
+        ...resolveResponseMeta(block, toolResults)
+      });
     } else if (name === "TaskUpdate" && input.taskId) {
       const existing = taskMap.get(input.taskId);
       if (existing) {
@@ -1041,7 +1200,11 @@ function replayTaskEvents(entries) {
           existing.content = input.subject;
         if (input.activeForm)
           existing.activeForm = input.activeForm;
-        snapshots.push({ timestamp, todos: [...taskMap.values()].map(cloneTodo) });
+        snapshots.push({
+          timestamp,
+          todos: [...taskMap.values()].map(cloneTodo),
+          ...resolveResponseMeta(block, toolResults)
+        });
       }
     }
   }
@@ -1064,17 +1227,20 @@ var TimelineService = class {
     } catch {
       return [];
     }
-    const entries = parseJsonlRows(content);
+    const parsed = parseJsonlRows(content);
+    const entries = parsed.entries;
+    const toolResults = parsed.toolResults;
     const raw = [];
     for (const { block, timestamp } of entries) {
       if ((block.name === "TodoWrite" || block.name === "__toolUseResult__") && Array.isArray(block.input?.todos)) {
         raw.push({
           timestamp,
-          todos: block.input.todos.map(normalizeTodo)
+          todos: block.input.todos.map(normalizeTodo),
+          ...resolveResponseMeta(block, toolResults)
         });
       }
     }
-    const taskSnapshots = replayTaskEvents(entries);
+    const taskSnapshots = replayTaskEvents(entries, toolResults);
     raw.push(...taskSnapshots);
     raw.sort((a, b) => {
       if (!a.timestamp && !b.timestamp)
@@ -1089,6 +1255,9 @@ var TimelineService = class {
     const snapshots = deduped.map((entry) => ({
       timestamp: entry.timestamp,
       todos: entry.todos,
+      responseStatus: entry.responseStatus,
+      responseSummary: entry.responseSummary,
+      responseAt: entry.responseAt,
       summary: computeSummary(entry.todos)
     }));
     try {
@@ -1106,7 +1275,7 @@ async function replayCurrentTasks(jsonlPath) {
   } catch {
     return [];
   }
-  const entries = parseJsonlRows(content);
+  const entries = parseJsonlRows(content).entries;
   const taskMap = /* @__PURE__ */ new Map();
   let nextId = 1;
   for (const { block, timestamp } of entries) {
@@ -1194,6 +1363,53 @@ function cloneTodo(todo) {
   return {
     content: todo.content,
     status: todo.status
+  };
+}
+function extractToolResultText(content) {
+  if (typeof content === "string")
+    return content;
+  if (Array.isArray(content)) {
+    const text = content.map((part) => {
+      if (typeof part === "string")
+        return part;
+      if (part && typeof part.text === "string")
+        return part.text;
+      return "";
+    }).join("\n").trim();
+    return text.slice(0, 200);
+  }
+  if (content && typeof content === "object" && typeof content.text === "string") {
+    return content.text.slice(0, 200);
+  }
+  return "";
+}
+function resolveResponseMeta(block, toolResults) {
+  if (block?.name === "__toolUseResult__") {
+    return {
+      responseStatus: "completed",
+      responseSummary: null,
+      responseAt: null
+    };
+  }
+  if (typeof block?.id !== "string") {
+    return {
+      responseStatus: "unknown",
+      responseSummary: null,
+      responseAt: null
+    };
+  }
+  const result = toolResults.get(block.id);
+  if (!result) {
+    return {
+      responseStatus: "running",
+      responseSummary: null,
+      responseAt: null
+    };
+  }
+  return {
+    responseStatus: result.isError ? "error" : "completed",
+    responseSummary: result.summary || null,
+    responseAt: result.timestamp
   };
 }
 function todosFingerprint(todos) {
@@ -2152,6 +2368,24 @@ var STATUS_COLOR = {
   in_progress: "yellow",
   pending: "gray"
 };
+var RESPONSE_ICON = {
+  completed: "\u2713",
+  running: "\u27F3",
+  error: "\u2717",
+  unknown: "?"
+};
+var RESPONSE_COLOR = {
+  completed: "green",
+  running: "yellow",
+  error: "red",
+  unknown: "gray"
+};
+var RESPONSE_LABEL = {
+  completed: "Completed",
+  running: "Running",
+  error: "Error",
+  unknown: "Unknown"
+};
 function formatTimestamp(iso) {
   if (!iso)
     return "unknown";
@@ -2164,6 +2398,9 @@ function progressBar(pct, width = 12) {
   const clamped = Math.max(0, Math.min(100, pct));
   const filled = Math.round(clamped / 100 * width);
   return `[${"#".repeat(filled)}${".".repeat(width - filled)}]`;
+}
+function truncate3(str, max) {
+  return str.length > max ? `${str.slice(0, max - 1)}\u2026` : str;
 }
 var VISIBLE_SNAPSHOTS = 16;
 function TimelineOverlay({
@@ -2237,8 +2474,11 @@ function TimelineOverlay({
           const isSel = realIndex === selectedIndex;
           const ts = formatTimestamp(snap.timestamp);
           const s = snap.summary;
+          const responseStatus = snap.responseStatus ?? "unknown";
           return /* @__PURE__ */ jsxs7(Text8, { color: isSel ? "cyan" : void 0, bold: isSel, children: [
             isSel ? "\u203A" : " ",
+            " ",
+            RESPONSE_ICON[responseStatus] ?? "?",
             " ",
             ts,
             "  ",
@@ -2276,6 +2516,17 @@ function TimelineOverlay({
           "%) ",
           progressBar(selected.summary.progressPct)
         ] }),
+        /* @__PURE__ */ jsxs7(Text8, { children: [
+          "Response:",
+          " ",
+          /* @__PURE__ */ jsxs7(Text8, { color: RESPONSE_COLOR[selected.responseStatus ?? "unknown"] ?? "gray", children: [
+            RESPONSE_ICON[selected.responseStatus ?? "unknown"] ?? "?",
+            " ",
+            RESPONSE_LABEL[selected.responseStatus ?? "unknown"] ?? "Unknown"
+          ] }),
+          selected.responseAt ? ` @ ${formatTimestamp(selected.responseAt)}` : ""
+        ] }),
+        selected.responseSummary && /* @__PURE__ */ jsx9(Text8, { dimColor: true, children: truncate3(selected.responseSummary.replace(/\s+/g, " ").trim(), 120) }),
         /* @__PURE__ */ jsx9(Text8, { children: " " }),
         selected.todos.map((todo, i) => /* @__PURE__ */ jsxs7(Text8, { color: STATUS_COLOR[todo.status] ?? void 0, children: [
           STATUS_ICON2[todo.status] ?? "?",
@@ -2320,7 +2571,7 @@ function formatDuration(start, end) {
   const remSecs = secs % 60;
   return `(${mins}m${remSecs}s)`;
 }
-function truncate3(text, maxLen) {
+function truncate4(text, maxLen) {
   if (text.length <= maxLen)
     return text;
   return text.slice(0, maxLen - 1) + "\u2026";
@@ -2482,7 +2733,7 @@ function ActivityOverlay({
         const labelColor = entryLabelColor(entry);
         const badge = entryBadge(entry);
         const duration = formatDuration(entry.timestamp, entry.completedAt);
-        const desc = truncate3(entry.description, 30);
+        const desc = truncate4(entry.description, 30);
         const badgePad = badge.padEnd(16).slice(0, 16);
         return /* @__PURE__ */ jsxs8(Box10, { children: [
           /* @__PURE__ */ jsx10(Text9, { color: isSel ? labelColor : void 0, bold: isSel, children: isSel ? "\u203A " : "  " }),
