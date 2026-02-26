@@ -27,6 +27,7 @@ export function useBackendData(
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
   const selectRequestRef = useRef(0);
+  const pollInFlightRef = useRef(false);
 
   const fetchSessions = useCallback(async () => {
     try {
@@ -52,17 +53,34 @@ export function useBackendData(
     mountedRef.current = true;
     fetchSessions();
 
-    const interval = setInterval(async () => {
-      const { isStale } = await adapter.checkCacheState();
-      if (isStale) {
-        adapter.invalidateCache();
-        fetchSessions();
+    const poll = async () => {
+      // With aggressive polling intervals (e.g. 200ms), avoid overlapping checks.
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
+      try {
+        const { isStale } = await adapter.checkCacheState();
+        if (isStale) {
+          adapter.invalidateCache();
+          await fetchSessions();
+        }
+      } catch (err: unknown) {
+        if (mountedRef.current) {
+          const message = err instanceof Error ? err.message : String(err);
+          setError(message);
+        }
+      } finally {
+        pollInFlightRef.current = false;
       }
+    };
+
+    const interval = setInterval(() => {
+      void poll();
     }, AUTO_REFRESH_MS);
 
     return () => {
       mountedRef.current = false;
       clearInterval(interval);
+      pollInFlightRef.current = false;
     };
   }, [fetchSessions, adapter]);
 

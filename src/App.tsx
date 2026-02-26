@@ -34,6 +34,11 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
   const [showActivity, setShowActivity] = useState(false);
   const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [commandMode, setCommandMode] = useState(false);
+  const [commandInput, setCommandInput] = useState('');
+  const commandModeRef = useRef(false);
+  const exiting = useRef(false);
+  const inputsLocked = commandMode || exiting.current;
 
   // Filter sessions by active/archived status
   const filteredSessions = useMemo(() => {
@@ -129,6 +134,8 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
   }, [adapter, filteredSessions, selectedSessionIndex]);
 
   useInput((input, key) => {
+    if (exiting.current) return;
+
     if (showHelp) {
       if (key.escape || input === '?' || input === 'q') {
         setShowHelp(false);
@@ -146,8 +153,48 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
       return;
     }
 
-    if (input === 'q') {
+    // Fast quit path for immediate exit (normal mode only).
+    if (!commandModeRef.current && input === 'q') {
+      exiting.current = true;
       exit();
+      return;
+    }
+
+    // Command mode (vim-style :q)
+    if (commandMode) {
+      if (key.escape) {
+        commandModeRef.current = false;
+        setCommandMode(false);
+        setCommandInput('');
+        return;
+      }
+      if (key.return) {
+        const cmd = commandInput.trim();
+        if (cmd === ':q!') {
+          exiting.current = true;
+          exit();
+          return;
+        }
+        // Unknown command — close command bar
+        commandModeRef.current = false;
+        setCommandMode(false);
+        setCommandInput('');
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setCommandInput((prev) => prev.slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta) {
+        setCommandInput((prev) => prev + input);
+      }
+      return;
+    }
+
+    if (key.escape) {
+      commandModeRef.current = true;
+      setCommandMode(true);
+      setCommandInput('');
       return;
     }
 
@@ -197,7 +244,7 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
     const parts = ['j/k:navigate', 'g/G:first/last', 'f:filter'];
     if (adapter.capabilities.timeline) parts.push('t:timeline');
     if (adapter.capabilities.activity) parts.push('a:activity');
-    parts.push('Enter:select', 'Tab:→kanban', '?:help', 'q:quit');
+    parts.push('Enter:select', 'Tab:→kanban', '?:help', 'q:quit', 'Esc→:q!:quit');
     return parts.join('  ');
   }, [adapter.capabilities]);
 
@@ -280,7 +327,7 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
               onOpen={handleOpenSession}
               filter={filter}
               onFilterChange={handleFilterChange}
-              isActive={focusedPanel === 'sidebar'}
+              isActive={focusedPanel === 'sidebar' && !inputsLocked}
               visibleHeight={sidebarVisibleHeight}
             />
           </Panel>
@@ -294,7 +341,7 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
             focused={focusedPanel === 'kanban'}
           >
             {adapter.capabilities.tasks ? (
-              <NavigableKanban tasks={currentTasks} isActive={focusedPanel === 'kanban'} />
+              <NavigableKanban tasks={currentTasks} isActive={focusedPanel === 'kanban' && !inputsLocked} />
             ) : (
               <Text dimColor>No tasks available for this backend</Text>
             )}
@@ -302,15 +349,21 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
         </Box>
       </Box>
 
-      {/* Status bar */}
+      {/* Status bar / command input */}
       <Box>
-        <Text backgroundColor="gray" color="white">
-          {' '}
-          {focusedPanel === 'sidebar'
-            ? sidebarHints
-            : 'h/j/k/l:navigate  Enter:open  Tab:→sessions  Esc:back  ?:help  q:quit'}
-          {' '}
-        </Text>
+        {commandMode ? (
+          <Text backgroundColor="gray" color="white">
+            {' '}{commandInput}<Text inverse> </Text>
+          </Text>
+        ) : (
+          <Text backgroundColor="gray" color="white">
+            {' '}
+            {focusedPanel === 'sidebar'
+              ? sidebarHints
+              : 'h/j/k/l:navigate  Enter:open  Tab:→sessions  Esc:back  ?:help  q:quit  Esc→:q!:quit'}
+            {' '}
+          </Text>
+        )}
       </Box>
     </Box>
   );

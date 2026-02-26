@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from '../../src/App.js';
@@ -6,6 +6,18 @@ import { createSession, createTask, createMockAdapter } from '../helpers/index.j
 
 const delay = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 const mockAdapter = createMockAdapter();
+const { mockSelectSession, mockExit } = vi.hoisted(() => ({
+  mockSelectSession: vi.fn(),
+  mockExit: vi.fn(),
+}));
+
+vi.mock('ink', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('ink')>();
+  return {
+    ...actual,
+    useApp: () => ({ exit: mockExit }),
+  };
+});
 
 vi.mock('../../src/hooks/useBackendData.js', () => ({
   useBackendData: vi.fn(() => ({
@@ -20,13 +32,18 @@ vi.mock('../../src/hooks/useBackendData.js', () => ({
     ],
     loading: false,
     error: null,
-    selectSession: vi.fn(),
+    selectSession: mockSelectSession,
     refresh: vi.fn(),
     adapter: mockAdapter,
   })),
 }));
 
 describe('App', () => {
+  beforeEach(() => {
+    mockSelectSession.mockClear();
+    mockExit.mockClear();
+  });
+
   it('should render session names and kanban columns', () => {
     const { lastFrame } = render(
       React.createElement(App, { adapter: mockAdapter })
@@ -95,5 +112,54 @@ describe('App', () => {
     expect(after).not.toEqual(before);
     // Should contain help-related text (shortcuts, keys, etc.)
     expect(after).toMatch(/help|shortcut|key/i);
+  });
+
+  it('should not open session when Enter is pressed in command mode', async () => {
+    const { stdin } = render(
+      React.createElement(App, { adapter: mockAdapter })
+    );
+
+    await delay();
+    const callsBefore = mockSelectSession.mock.calls.length;
+
+    // Enter command mode, type :q!, then execute
+    stdin.write('\x1B');
+    await delay();
+    stdin.write(':q!');
+    await delay();
+    stdin.write('\r');
+    await delay();
+
+    expect(mockExit).toHaveBeenCalledTimes(1);
+    expect(mockSelectSession).toHaveBeenCalledTimes(callsBefore);
+  });
+
+  it('should quit immediately on q without opening session', async () => {
+    const { stdin } = render(
+      React.createElement(App, { adapter: mockAdapter })
+    );
+
+    await delay();
+    const callsBefore = mockSelectSession.mock.calls.length;
+
+    stdin.write('q');
+    await delay();
+
+    expect(mockExit).toHaveBeenCalledTimes(1);
+    expect(mockSelectSession).toHaveBeenCalledTimes(callsBefore);
+  });
+
+  it('should not quit when typing :q immediately after Esc', async () => {
+    const { stdin } = render(
+      React.createElement(App, { adapter: mockAdapter })
+    );
+
+    await delay();
+
+    // Simulate fast typing where state update may not have re-rendered yet.
+    stdin.write('\x1B:q');
+    await delay();
+
+    expect(mockExit).toHaveBeenCalledTimes(0);
   });
 });
