@@ -204,4 +204,79 @@ describe('TimelineService', () => {
     expect(result).toHaveLength(1);
     expect(result[0].todos).toEqual([{ content: 'OK', status: 'pending' }]);
   });
+
+  // 9. TaskCreate/TaskUpdate snapshots should preserve historical state
+  it('keeps full TaskCreate/TaskUpdate timeline without mutating past snapshots', async () => {
+    const makeLine = (block: any, ts: string) =>
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [block],
+        },
+        timestamp: ts,
+      });
+
+    const lines = [
+      makeLine(
+        { type: 'tool_use', name: 'TaskCreate', input: { subject: 'Task A' } },
+        '2026-02-26T10:00:00Z',
+      ),
+      makeLine(
+        { type: 'tool_use', name: 'TaskCreate', input: { subject: 'Task B' } },
+        '2026-02-26T10:01:00Z',
+      ),
+      makeLine(
+        { type: 'tool_use', name: 'TaskUpdate', input: { taskId: '1', status: 'in_progress' } },
+        '2026-02-26T10:02:00Z',
+      ),
+      makeLine(
+        { type: 'tool_use', name: 'TaskUpdate', input: { taskId: '1', status: 'completed' } },
+        '2026-02-26T10:03:00Z',
+      ),
+    ].join('\n');
+
+    vi.mocked(fs.readFile).mockResolvedValue(lines);
+    const result = await service.parseSessionTimeline('/tmp/task-events.jsonl');
+
+    expect(result).toHaveLength(4);
+    expect(result[0].todos).toEqual([{ content: 'Task A', status: 'pending' }]);
+    expect(result[1].todos).toEqual([
+      { content: 'Task A', status: 'pending' },
+      { content: 'Task B', status: 'pending' },
+    ]);
+    expect(result[2].todos).toEqual([
+      { content: 'Task A', status: 'in_progress' },
+      { content: 'Task B', status: 'pending' },
+    ]);
+    expect(result[3].todos).toEqual([
+      { content: 'Task A', status: 'completed' },
+      { content: 'Task B', status: 'pending' },
+    ]);
+  });
+
+  // 10. Task events can also be emitted in progress rows (agent_progress)
+  it('parses TaskCreate/TaskUpdate events from progress row payloads', async () => {
+    const line = JSON.stringify({
+      type: 'progress',
+      timestamp: '2026-02-26T11:00:00Z',
+      data: {
+        message: {
+          message: {
+            content: [
+              { type: 'tool_use', name: 'TaskCreate', input: { subject: 'Ship fix' } },
+              { type: 'tool_use', name: 'TaskUpdate', input: { taskId: '1', status: 'completed' } },
+            ],
+          },
+        },
+      },
+    });
+
+    vi.mocked(fs.readFile).mockResolvedValue(line);
+    const result = await service.parseSessionTimeline('/tmp/progress-task-events.jsonl');
+
+    expect(result).toHaveLength(2);
+    expect(result[0].todos).toEqual([{ content: 'Ship fix', status: 'pending' }]);
+    expect(result[1].todos).toEqual([{ content: 'Ship fix', status: 'completed' }]);
+  });
 });

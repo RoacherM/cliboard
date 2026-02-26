@@ -26,12 +26,19 @@ function parseJsonlRows(content: string): Array<{ row: any; block: any; timestam
       continue;
     }
 
-    if (
-      row.type === 'assistant' &&
-      row.message?.content &&
-      Array.isArray(row.message.content)
-    ) {
-      for (const block of row.message.content) {
+    const contentBlocks: any[][] = [];
+    if (Array.isArray(row.message?.content)) {
+      contentBlocks.push(row.message.content);
+    }
+    if (Array.isArray(row.data?.message?.content)) {
+      contentBlocks.push(row.data.message.content);
+    }
+    if (Array.isArray(row.data?.message?.message?.content)) {
+      contentBlocks.push(row.data.message.message.content);
+    }
+
+    for (const blocks of contentBlocks) {
+      for (const block of blocks) {
         if (block?.type === 'tool_use') {
           results.push({ row, block, timestamp: row.timestamp ?? null });
         }
@@ -77,14 +84,14 @@ function replayTaskEvents(
         status: 'pending',
         ...(input.activeForm ? { activeForm: input.activeForm } : {}),
       });
-      snapshots.push({ timestamp, todos: [...taskMap.values()] });
+      snapshots.push({ timestamp, todos: [...taskMap.values()].map(cloneTodo) });
     } else if (name === 'TaskUpdate' && input.taskId) {
       const existing = taskMap.get(input.taskId);
       if (existing) {
         if (input.status) existing.status = input.status;
         if (input.subject) existing.content = input.subject;
         if (input.activeForm) existing.activeForm = input.activeForm;
-        snapshots.push({ timestamp, todos: [...taskMap.values()] });
+        snapshots.push({ timestamp, todos: [...taskMap.values()].map(cloneTodo) });
       }
     }
   }
@@ -250,6 +257,20 @@ function normalizeTodo(todo: any): TodoItem {
     ...(typeof todo.activeForm === 'string'
       ? { activeForm: todo.activeForm }
       : {}),
+  };
+}
+
+function cloneTodo(todo: TodoItem): TodoItem {
+  if ('activeForm' in todo) {
+    return {
+      content: todo.content,
+      status: todo.status,
+      activeForm: todo.activeForm,
+    };
+  }
+  return {
+    content: todo.content,
+    status: todo.status,
   };
 }
 

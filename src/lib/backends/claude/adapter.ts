@@ -62,18 +62,18 @@ export class ClaudeBackendAdapter implements BackendAdapter {
       const name = this.metadataService.resolveSessionName(sessionId, metadata);
       const taskCount = tasks.length;
 
-      // Check liveness early so we can skip sessions with no tasks AND no recent activity
+      // Compute liveness from JSONL mtime for "live" badge/indicator
       let isLive = false;
+      let mtimeMs = 0;
       if (metadata.jsonlPath) {
         try {
           const stat = await fs.stat(metadata.jsonlPath);
-          isLive = Date.now() - stat.mtimeMs < SESSION_LIVENESS_MS;
+          mtimeMs = stat.mtimeMs;
+          isLive = Date.now() - mtimeMs < SESSION_LIVENESS_MS;
         } catch {
           isLive = false;
         }
       }
-
-      if (taskCount === 0 && !isLive) continue;
 
       const completed = tasks.filter((t) => t.status === 'completed').length;
       const inProgress = tasks.filter((t) => t.status === 'in_progress').length;
@@ -87,13 +87,8 @@ export class ClaudeBackendAdapter implements BackendAdapter {
           modifiedAt = taskDate;
         }
       }
-      if (!modifiedAt && metadata.jsonlPath) {
-        try {
-          const stat = await fs.stat(metadata.jsonlPath);
-          modifiedAt = new Date(stat.mtimeMs).toISOString();
-        } catch {
-          // ignore
-        }
+      if (!modifiedAt && mtimeMs > 0) {
+        modifiedAt = new Date(mtimeMs).toISOString();
       }
       if (!modifiedAt) {
         modifiedAt = metadata.created ?? new Date(0).toISOString();
@@ -101,8 +96,9 @@ export class ClaudeBackendAdapter implements BackendAdapter {
 
       const archiveThresholdMs = ARCHIVE_THRESHOLD_DAYS * 24 * 60 * 60 * 1000;
       const isArchived =
-        inProgress === 0 &&
-        Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs;
+        taskCount === 0 ||
+        (inProgress === 0 &&
+          Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs);
 
       resolved.push({
         id: sessionId,

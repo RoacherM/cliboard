@@ -95,7 +95,7 @@ function seedDatabase() {
   db.prepare(
     `INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated, time_archived)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run('ses-1', 'proj-1', null, 'my-session', '/home/user/my-project', 'Build Feature X', 'v1', now - 5 * hour, now - hour, null);
+  ).run('ses-1', 'proj-1', null, 'my-session', '/home/user/my-project', 'Build Feature X', 'v1', now - 5 * hour, now - 1_000, null);
 
   db.prepare(
     `INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated, time_archived)
@@ -106,7 +106,7 @@ function seedDatabase() {
   db.prepare(
     `INSERT INTO session (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated, time_archived)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run('ses-3', 'proj-1', 'ses-1', 'child-session', '/home/user/my-project', 'Sub Session', 'v1', now - 2 * hour, now - hour, null);
+  ).run('ses-3', 'proj-1', 'ses-1', 'child-session', '/home/user/my-project', 'Sub Session', 'v1', now - 2 * hour, now - 1_000, null);
 
   // Archived session with todos
   db.prepare(
@@ -269,14 +269,14 @@ describe('OpenCodeBackendAdapter', () => {
   });
 
   describe('loadSessions', () => {
-    it('should load only parent sessions with todos', async () => {
+    it('should load only parent sessions, including zero-todo sessions', async () => {
       const sessions = await adapter.loadSessions();
-      // ses-1 (has todos), ses-4 (archived, has todos) — ses-2 (no todos) and ses-3 (child) excluded
-      expect(sessions).toHaveLength(2);
+      // ses-1 (live with todos), ses-2 (no todos), ses-4 (archived with todos) — ses-3 (child) excluded
+      expect(sessions).toHaveLength(3);
       const ids = sessions.map((s) => s.id);
       expect(ids).toContain('ses-1');
+      expect(ids).toContain('ses-2');
       expect(ids).toContain('ses-4');
-      expect(ids).not.toContain('ses-2'); // no todos
       expect(ids).not.toContain('ses-3'); // child session
     });
 
@@ -291,14 +291,18 @@ describe('OpenCodeBackendAdapter', () => {
       expect(s1.completed).toBe(1);
       expect(s1.inProgress).toBe(1);
       expect(s1.pending).toBe(1);
+      expect(s1.isLive).toBe(true);
       expect(s1.isArchived).toBe(false);
       expect(s1.backendId).toBe('opencode');
       expect(s1.jsonlPath).toBeNull();
     });
 
-    it('should mark archived sessions correctly', async () => {
+    it('should force-archive zero-todo sessions and keep explicit archived sessions archived', async () => {
       const sessions = await adapter.loadSessions();
+      const s2 = sessions.find((s) => s.id === 'ses-2')!;
       const s4 = sessions.find((s) => s.id === 'ses-4')!;
+      expect(s2.isLive).toBe(false);
+      expect(s2.isArchived).toBe(true);
       expect(s4.isArchived).toBe(true);
     });
 

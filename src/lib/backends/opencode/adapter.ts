@@ -65,7 +65,7 @@ export class OpenCodeBackendAdapter implements BackendAdapter {
   async loadSessions(options?: { projectPath?: string }): Promise<Session[]> {
     const db = await this.getDb();
 
-    // Only load sessions that have todos
+    // Load parent sessions, including those with zero todos.
     let query = `
       SELECT
         s.id, s.title, s.slug, s.directory,
@@ -78,7 +78,7 @@ export class OpenCodeBackendAdapter implements BackendAdapter {
         SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END) as pending
       FROM session s
       LEFT JOIN project p ON s.project_id = p.id
-      INNER JOIN todo t ON t.session_id = s.id
+      LEFT JOIN todo t ON t.session_id = s.id
     `;
 
     const params: any[] = [];
@@ -102,7 +102,7 @@ export class OpenCodeBackendAdapter implements BackendAdapter {
     return rows.map((row) => {
       const modifiedAt = new Date(row.time_updated).toISOString();
       const isLive = now - row.time_updated < SESSION_LIVENESS_MS;
-      const isArchived = row.time_archived != null;
+      const isArchived = row.todo_count === 0 || row.time_archived != null;
       const projectPath = row.directory || row.project_worktree || null;
 
       return {
@@ -320,7 +320,8 @@ function summarizeOpenCodeInput(tool: string, input: Record<string, any>, title:
   return truncate(`${key}: ${str}`, 120);
 }
 
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + '…';
+function truncate(s: unknown, max: number): string {
+  const str = typeof s === 'string' ? s : (s == null ? '' : JSON.stringify(s));
+  if (str.length <= max) return str;
+  return str.slice(0, max - 1) + '…';
 }

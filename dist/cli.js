@@ -23,7 +23,7 @@ var init_constants = __esm({
     ARCHIVE_THRESHOLD_DAYS = 7;
     JSONL_READ_LIMIT = 65536;
     AUTO_REFRESH_MS = 2e3;
-    SESSION_LIVENESS_MS = 5 * 6e4;
+    SESSION_LIVENESS_MS = 5e3;
   }
 });
 
@@ -77,9 +77,10 @@ function summarizeOpenCodeInput(tool, input, title) {
   return truncate(`${key}: ${str}`, 120);
 }
 function truncate(s, max) {
-  if (s.length <= max)
-    return s;
-  return s.slice(0, max - 1) + "\u2026";
+  const str = typeof s === "string" ? s : s == null ? "" : JSON.stringify(s);
+  if (str.length <= max)
+    return str;
+  return str.slice(0, max - 1) + "\u2026";
 }
 var DEFAULT_DB_PATH, PRIORITY_MAP, OpenCodeBackendAdapter, BUILTIN_TOOLS;
 var init_adapter = __esm({
@@ -147,7 +148,7 @@ var init_adapter = __esm({
         SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END) as pending
       FROM session s
       LEFT JOIN project p ON s.project_id = p.id
-      INNER JOIN todo t ON t.session_id = s.id
+      LEFT JOIN todo t ON t.session_id = s.id
     `;
         const params = [];
         if (options?.projectPath) {
@@ -165,7 +166,7 @@ var init_adapter = __esm({
         return rows.map((row) => {
           const modifiedAt = new Date(row.time_updated).toISOString();
           const isLive = now - row.time_updated < SESSION_LIVENESS_MS;
-          const isArchived = row.time_archived != null;
+          const isArchived = row.todo_count === 0 || row.time_archived != null;
           const projectPath = row.directory || row.project_worktree || null;
           return {
             id: row.id,
@@ -989,8 +990,18 @@ function parseJsonlRows(content) {
     } catch {
       continue;
     }
-    if (row.type === "assistant" && row.message?.content && Array.isArray(row.message.content)) {
-      for (const block of row.message.content) {
+    const contentBlocks = [];
+    if (Array.isArray(row.message?.content)) {
+      contentBlocks.push(row.message.content);
+    }
+    if (Array.isArray(row.data?.message?.content)) {
+      contentBlocks.push(row.data.message.content);
+    }
+    if (Array.isArray(row.data?.message?.message?.content)) {
+      contentBlocks.push(row.data.message.message.content);
+    }
+    for (const blocks of contentBlocks) {
+      for (const block of blocks) {
         if (block?.type === "tool_use") {
           results.push({ row, block, timestamp: row.timestamp ?? null });
         }
@@ -1020,7 +1031,7 @@ function replayTaskEvents(entries) {
         status: "pending",
         ...input.activeForm ? { activeForm: input.activeForm } : {}
       });
-      snapshots.push({ timestamp, todos: [...taskMap.values()] });
+      snapshots.push({ timestamp, todos: [...taskMap.values()].map(cloneTodo) });
     } else if (name === "TaskUpdate" && input.taskId) {
       const existing = taskMap.get(input.taskId);
       if (existing) {
@@ -1030,7 +1041,7 @@ function replayTaskEvents(entries) {
           existing.content = input.subject;
         if (input.activeForm)
           existing.activeForm = input.activeForm;
-        snapshots.push({ timestamp, todos: [...taskMap.values()] });
+        snapshots.push({ timestamp, todos: [...taskMap.values()].map(cloneTodo) });
       }
     }
   }
@@ -1172,6 +1183,19 @@ function normalizeTodo(todo) {
     ...typeof todo.activeForm === "string" ? { activeForm: todo.activeForm } : {}
   };
 }
+function cloneTodo(todo) {
+  if ("activeForm" in todo) {
+    return {
+      content: todo.content,
+      status: todo.status,
+      activeForm: todo.activeForm
+    };
+  }
+  return {
+    content: todo.content,
+    status: todo.status
+  };
+}
 function todosFingerprint(todos) {
   return JSON.stringify(
     todos.map((t) => ({
@@ -1262,16 +1286,16 @@ var ClaudeBackendAdapter = class {
       const name = this.metadataService.resolveSessionName(sessionId, metadata);
       const taskCount = tasks.length;
       let isLive = false;
+      let mtimeMs = 0;
       if (metadata.jsonlPath) {
         try {
           const stat = await fs5.stat(metadata.jsonlPath);
-          isLive = Date.now() - stat.mtimeMs < SESSION_LIVENESS_MS;
+          mtimeMs = stat.mtimeMs;
+          isLive = Date.now() - mtimeMs < SESSION_LIVENESS_MS;
         } catch {
           isLive = false;
         }
       }
-      if (taskCount === 0 && !isLive)
-        continue;
       const completed = tasks.filter((t) => t.status === "completed").length;
       const inProgress = tasks.filter((t) => t.status === "in_progress").length;
       const pending = tasks.filter((t) => t.status === "pending").length;
@@ -1282,18 +1306,14 @@ var ClaudeBackendAdapter = class {
           modifiedAt = taskDate;
         }
       }
-      if (!modifiedAt && metadata.jsonlPath) {
-        try {
-          const stat = await fs5.stat(metadata.jsonlPath);
-          modifiedAt = new Date(stat.mtimeMs).toISOString();
-        } catch {
-        }
+      if (!modifiedAt && mtimeMs > 0) {
+        modifiedAt = new Date(mtimeMs).toISOString();
       }
       if (!modifiedAt) {
         modifiedAt = metadata.created ?? (/* @__PURE__ */ new Date(0)).toISOString();
       }
       const archiveThresholdMs = ARCHIVE_THRESHOLD_DAYS * 24 * 60 * 60 * 1e3;
-      const isArchived = inProgress === 0 && Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs;
+      const isArchived = taskCount === 0 || inProgress === 0 && Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs;
       resolved.push({
         id: sessionId,
         name,
@@ -1455,9 +1475,9 @@ async function pathExists(p) {
     return false;
   }
 }
-async function detectAvailableBackends() {
+async function detectAvailableBackends(claudeDir) {
   const available = [];
-  if (await pathExists(CLAUDE_DIR_PATH)) {
+  if (await pathExists(claudeDir ?? CLAUDE_DIR_PATH)) {
     available.push("claude");
   }
   if (await pathExists(OPENCODE_DB_PATH)) {
@@ -1474,7 +1494,7 @@ async function createSingleAdapter(id, claudeDir) {
 }
 async function createAdapter(backend, claudeDir) {
   if (backend === "auto") {
-    const available = await detectAvailableBackends();
+    const available = await detectAvailableBackends(claudeDir);
     if (available.length > 1) {
       const adapters = await Promise.all(
         available.map((id) => createSingleAdapter(id, claudeDir))
