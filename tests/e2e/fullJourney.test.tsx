@@ -162,9 +162,9 @@ describe('E2E: Full journey', () => {
     stdin.write('j');
     await delay();
 
-    // selectSession should NOT have been called again (sidebar is inactive)
-    // It was called once when we pressed j in the sidebar
-    expect(mockData.selectSession).toHaveBeenCalledTimes(1);
+    // selectSession is called: once on initial load + once when we pressed j
+    // Pressing j in kanban should NOT trigger another call
+    expect(mockData.selectSession).toHaveBeenCalledTimes(2);
   });
 
   it('should not crash when q is pressed', async () => {

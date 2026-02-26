@@ -24,6 +24,7 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
   const sidebarVisibleHeight = Math.max(3, Math.floor(((stdout?.rows ?? 24) - 6) / 2));
 
   const [selectedSessionIndex, setSelectedSessionIndex] = useState(0);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>('sidebar');
   const [filter, setFilter] = useState<'all' | 'active' | 'archived'>('active');
   const [showHelp, setShowHelp] = useState(false);
@@ -40,6 +41,21 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
     if (filter === 'active') return sessions.filter((s) => !s.isArchived);
     return sessions.filter((s) => s.isArchived); // 'archived'
   }, [sessions, filter]);
+
+  // Preserve selection by session ID across list refreshes/reorders
+  useEffect(() => {
+    if (filteredSessions.length === 0) return;
+    if (!selectedSessionId) {
+      // Initial load: select first session
+      setSelectedSessionId(filteredSessions[0]!.id);
+      selectSession(filteredSessions[0]!.id);
+      return;
+    }
+    const newIndex = filteredSessions.findIndex((s) => s.id === selectedSessionId);
+    if (newIndex !== -1 && newIndex !== selectedSessionIndex) {
+      setSelectedSessionIndex(newIndex);
+    }
+  }, [filteredSessions, selectedSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ring terminal bell when any session's task counts change
   const prevSessionsRef = useRef<typeof sessions>([]);
@@ -60,8 +76,10 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
   const handleSelectSession = useCallback(
     (index: number) => {
       setSelectedSessionIndex(index);
-      if (filteredSessions[index]) {
-        selectSession(filteredSessions[index].id);
+      const session = filteredSessions[index];
+      if (session) {
+        setSelectedSessionId(session.id);
+        selectSession(session.id);
       }
     },
     [filteredSessions, selectSession],
@@ -145,6 +163,7 @@ export function App({ adapter, projectPath }: AppProps): React.ReactElement {
         return 'all';
       });
       setSelectedSessionIndex(0);
+      setSelectedSessionId(null);
       return;
     }
 

@@ -1261,20 +1261,6 @@ var ClaudeBackendAdapter = class {
       }
       const name = this.metadataService.resolveSessionName(sessionId, metadata);
       const taskCount = tasks.length;
-      if (taskCount === 0)
-        continue;
-      const completed = tasks.filter((t) => t.status === "completed").length;
-      const inProgress = tasks.filter((t) => t.status === "in_progress").length;
-      const pending = tasks.filter((t) => t.status === "pending").length;
-      let modifiedAt = (/* @__PURE__ */ new Date(0)).toISOString();
-      for (const task of tasks) {
-        const taskDate = task.updatedAt ?? task.createdAt ?? "";
-        if (taskDate > modifiedAt) {
-          modifiedAt = taskDate;
-        }
-      }
-      const archiveThresholdMs = ARCHIVE_THRESHOLD_DAYS * 24 * 60 * 60 * 1e3;
-      const isArchived = inProgress === 0 && Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs;
       let isLive = false;
       if (metadata.jsonlPath) {
         try {
@@ -1284,6 +1270,30 @@ var ClaudeBackendAdapter = class {
           isLive = false;
         }
       }
+      if (taskCount === 0 && !isLive)
+        continue;
+      const completed = tasks.filter((t) => t.status === "completed").length;
+      const inProgress = tasks.filter((t) => t.status === "in_progress").length;
+      const pending = tasks.filter((t) => t.status === "pending").length;
+      let modifiedAt = "";
+      for (const task of tasks) {
+        const taskDate = task.updatedAt ?? task.createdAt ?? "";
+        if (taskDate > modifiedAt) {
+          modifiedAt = taskDate;
+        }
+      }
+      if (!modifiedAt && metadata.jsonlPath) {
+        try {
+          const stat = await fs5.stat(metadata.jsonlPath);
+          modifiedAt = new Date(stat.mtimeMs).toISOString();
+        } catch {
+        }
+      }
+      if (!modifiedAt) {
+        modifiedAt = metadata.created ?? (/* @__PURE__ */ new Date(0)).toISOString();
+      }
+      const archiveThresholdMs = ARCHIVE_THRESHOLD_DAYS * 24 * 60 * 60 * 1e3;
+      const isArchived = inProgress === 0 && Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs;
       resolved.push({
         id: sessionId,
         name,
@@ -2626,6 +2636,7 @@ function App({ adapter, projectPath }) {
   const { stdout } = useStdout2();
   const sidebarVisibleHeight = Math.max(3, Math.floor(((stdout?.rows ?? 24) - 6) / 2));
   const [selectedSessionIndex, setSelectedSessionIndex] = useState6(0);
+  const [selectedSessionId, setSelectedSessionId] = useState6(null);
   const [focusedPanel, setFocusedPanel] = useState6("sidebar");
   const [filter, setFilter] = useState6("active");
   const [showHelp, setShowHelp] = useState6(false);
@@ -2642,6 +2653,19 @@ function App({ adapter, projectPath }) {
       return sessions.filter((s) => !s.isArchived);
     return sessions.filter((s) => s.isArchived);
   }, [sessions, filter]);
+  useEffect3(() => {
+    if (filteredSessions.length === 0)
+      return;
+    if (!selectedSessionId) {
+      setSelectedSessionId(filteredSessions[0].id);
+      selectSession(filteredSessions[0].id);
+      return;
+    }
+    const newIndex = filteredSessions.findIndex((s) => s.id === selectedSessionId);
+    if (newIndex !== -1 && newIndex !== selectedSessionIndex) {
+      setSelectedSessionIndex(newIndex);
+    }
+  }, [filteredSessions, selectedSessionId]);
   const prevSessionsRef = useRef5([]);
   useEffect3(() => {
     const prev = prevSessionsRef.current;
@@ -2659,8 +2683,10 @@ function App({ adapter, projectPath }) {
   const handleSelectSession = useCallback3(
     (index) => {
       setSelectedSessionIndex(index);
-      if (filteredSessions[index]) {
-        selectSession(filteredSessions[index].id);
+      const session = filteredSessions[index];
+      if (session) {
+        setSelectedSessionId(session.id);
+        selectSession(session.id);
       }
     },
     [filteredSessions, selectSession]
@@ -2738,6 +2764,7 @@ function App({ adapter, projectPath }) {
         return "all";
       });
       setSelectedSessionIndex(0);
+      setSelectedSessionId(null);
       return;
     }
     if (input === "t" && focusedPanel === "sidebar" && filteredSessions.length > 0 && adapter.capabilities.timeline) {

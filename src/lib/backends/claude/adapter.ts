@@ -62,25 +62,7 @@ export class ClaudeBackendAdapter implements BackendAdapter {
       const name = this.metadataService.resolveSessionName(sessionId, metadata);
       const taskCount = tasks.length;
 
-      if (taskCount === 0) continue;
-
-      const completed = tasks.filter((t) => t.status === 'completed').length;
-      const inProgress = tasks.filter((t) => t.status === 'in_progress').length;
-      const pending = tasks.filter((t) => t.status === 'pending').length;
-
-      let modifiedAt = new Date(0).toISOString();
-      for (const task of tasks) {
-        const taskDate = task.updatedAt ?? task.createdAt ?? '';
-        if (taskDate > modifiedAt) {
-          modifiedAt = taskDate;
-        }
-      }
-
-      const archiveThresholdMs = ARCHIVE_THRESHOLD_DAYS * 24 * 60 * 60 * 1000;
-      const isArchived =
-        inProgress === 0 &&
-        Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs;
-
+      // Check liveness early so we can skip sessions with no tasks AND no recent activity
       let isLive = false;
       if (metadata.jsonlPath) {
         try {
@@ -90,6 +72,37 @@ export class ClaudeBackendAdapter implements BackendAdapter {
           isLive = false;
         }
       }
+
+      if (taskCount === 0 && !isLive) continue;
+
+      const completed = tasks.filter((t) => t.status === 'completed').length;
+      const inProgress = tasks.filter((t) => t.status === 'in_progress').length;
+      const pending = tasks.filter((t) => t.status === 'pending').length;
+
+      // Use latest task timestamp, falling back to JSONL file mtime
+      let modifiedAt = '';
+      for (const task of tasks) {
+        const taskDate = task.updatedAt ?? task.createdAt ?? '';
+        if (taskDate > modifiedAt) {
+          modifiedAt = taskDate;
+        }
+      }
+      if (!modifiedAt && metadata.jsonlPath) {
+        try {
+          const stat = await fs.stat(metadata.jsonlPath);
+          modifiedAt = new Date(stat.mtimeMs).toISOString();
+        } catch {
+          // ignore
+        }
+      }
+      if (!modifiedAt) {
+        modifiedAt = metadata.created ?? new Date(0).toISOString();
+      }
+
+      const archiveThresholdMs = ARCHIVE_THRESHOLD_DAYS * 24 * 60 * 60 * 1000;
+      const isArchived =
+        inProgress === 0 &&
+        Date.now() - new Date(modifiedAt).getTime() > archiveThresholdMs;
 
       resolved.push({
         id: sessionId,
